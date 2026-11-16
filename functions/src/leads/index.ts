@@ -320,3 +320,5 @@ export const bulkAssignLeads = onCall(async (request) => {
 
   return { assignedCount: input.leadIds.length };
 });
+
+export * from './public-portal';
