@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "bharat-makaan-prod",
+    "staging": "bharat-makaan-staging"
+  }
+}

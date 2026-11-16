@@ -1,0 +1,1155 @@
+/**
+ * @bharat-makaan/shared — Canonical Domain Entities (All 36 Core Firestore Collections)
+ */
+
+import type { SaasPlanCode } from '@bharat-makaan/config';
+import type { PermissionKey, RoleKey } from './permissions';
+
+export type ISODateString = string;
+
+// 1. organizations
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  legalName: string;
+  gstin?: string;
+  pan?: string;
+  reraNumber?: string;
+  headquartersCity: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  logoUrl?: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  subscriptionPlanId: SaasPlanCode;
+  leadProtectionDays: number; // Configurable lead protection window for channel partners
+  whatsappAutoSendAi: boolean; // Must default to false; AI replies require human approval by default
+  createdBy: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 2. organization_members
+export interface OrganizationMember {
+  id: string; // `${orgId}_${uid}`
+  orgId: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  phone?: string;
+  role: RoleKey;
+  permissions: PermissionKey[];
+  assignedProjectIds: string[];
+  department?: string;
+  managerUid?: string;
+  status: 'INVITED' | 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  mfaRequired: boolean;
+  mfaEnrolled?: boolean;
+  invitedBy: string;
+  invitedAt: ISODateString;
+  lastActiveAt?: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 3. projects
+export type ProjectType = 'APARTMENT' | 'VILLA' | 'PLOTTED' | 'COMMERCIAL' | 'MIXED';
+export type ConstructionStatus =
+  | 'PRE_LAUNCH'
+  | 'NEW_LAUNCH'
+  | 'UNDER_CONSTRUCTION'
+  | 'NEARING_POSSESSION'
+  | 'READY_TO_MOVE';
+
+export interface ProjectStats {
+  totalUnits: number;
+  availableUnits: number;
+  onHoldUnits: number;
+  reservedUnits: number;
+  bookedUnits: number;
+  agreementUnits: number;
+  registeredUnits: number;
+  totalLeads: number;
+  totalSiteVisits: number;
+  bookedSalesValueInr: number;
+  collectionsVerifiedInr: number;
+  pendingTasksCount: number;
+}
+
+export interface Project {
+  id: string;
+  orgId: string;
+  builderName: string;
+  name: string;
+  code: string;
+  city: string;
+  locality: string;
+  address: string;
+  coordinates?: { lat: number; lng: number };
+  projectType: ProjectType;
+  reraNumber: string;
+  reraValidUntil?: ISODateString;
+  landAreaAcres?: number;
+  totalPhases: number;
+  totalTowers: number;
+  totalFloors: number;
+  totalUnits: number;
+  configurations: string[]; // e.g., ["2 BHK", "3 BHK", "4 BHK"]
+  amenities: string[];
+  constructionStatus: ConstructionStatus;
+  possessionDate?: ISODateString;
+  heroImageUrl?: string;
+  galleryImageUrls: string[];
+  videoUrls: string[];
+  brochureDocumentId?: string;
+  masterPlanDocumentId?: string;
+  teamMemberUids: string[];
+  isPublicPublished: boolean;
+  listingIntent: 'BUY' | 'RENT' | 'BOTH';
+  startingPriceInr?: number;
+  stats: ProjectStats;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 4. project_phases
+export interface ProjectPhase {
+  id: string;
+  orgId: string;
+  projectId: string;
+  name: string;
+  code: string;
+  sequence: number;
+  reraNumber?: string;
+  constructionStatus: ConstructionStatus;
+  possessionDate?: ISODateString;
+  totalTowers: number;
+  totalUnits: number;
+  createdAt: ISODateString;
+}
+
+// 5. towers
+export type TowerKind = 'TOWER' | 'BLOCK' | 'SECTOR' | 'VILLA_CLUSTER';
+
+export interface Tower {
+  id: string;
+  orgId: string;
+  projectId: string;
+  phaseId?: string | null;
+  name: string;
+  code: string;
+  towerType: TowerKind;
+  totalFloors: number;
+  basementLevels: number;
+  podiumLevels: number;
+  unitsPerFloorTypical: number;
+  status: 'ACTIVE' | 'PLANNED' | 'HANDED_OVER';
+  createdAt: ISODateString;
+}
+
+// 6. floors
+export type FloorCategory =
+  | 'PODIUM'
+  | 'LOWER_RESIDENTIAL'
+  | 'TYPICAL'
+  | 'PENTHOUSE'
+  | 'REFUGE'
+  | 'COMMERCIAL'
+  | 'GROUND_PLOT';
+
+export interface Floor {
+  id: string;
+  orgId: string;
+  projectId: string;
+  phaseId?: string | null;
+  towerId: string;
+  floorNumber: number;
+  label: string;
+  floorCategory: FloorCategory;
+  totalUnits: number;
+  createdAt: ISODateString;
+}
+
+// 7. units
+export type UnitStatus =
+  | 'AVAILABLE'
+  | 'ON_HOLD'
+  | 'RESERVED'
+  | 'BOOKED'
+  | 'AGREEMENT'
+  | 'REGISTERED';
+
+export type UnitType = 'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE';
+export type FacingDirection =
+  | 'EAST'
+  | 'WEST'
+  | 'NORTH'
+  | 'SOUTH'
+  | 'NORTH_EAST'
+  | 'NORTH_WEST'
+  | 'SOUTH_EAST'
+  | 'SOUTH_WEST';
+
+export interface Unit {
+  id: string;
+  orgId: string;
+  projectId: string;
+  phaseId?: string | null;
+  towerId?: string | null;
+  towerName?: string;
+  floorId?: string | null;
+  floorNumber: number; // 0 for plots/villas without apartment floors
+  unitNumber: string; // e.g., "C-704"
+  unitType: UnitType;
+  bhk: string; // e.g., "3 BHK", "4 BHK", "PLOT"
+  saleableAreaSqft: number;
+  carpetAreaSqft: number;
+  plotAreaSqft?: number;
+  facing: FacingDirection;
+  viewType?: string; // e.g., "CENTRAL_PARK", "POOL", "CITY", "STANDARD"
+  isCorner: boolean;
+  balconiesCount: number;
+  parkingEntitlementCount: number; // Entitlement count (distinct from physical assigned slots)
+  assignedParkingSlotIds: string[]; // Physical parking slot IDs allocated
+  baseRatePerSqft: number;
+  activePriceBookId?: string;
+  floorRiseAmount: number;
+  premiumChargesAmount: number;
+  calculatedTotalPrice: number;
+  status: UnitStatus;
+  holdExpiresAt?: ISODateString | null;
+  heldByUid?: string | null;
+  heldForLeadId?: string | null;
+  activeBookingId?: string | null;
+  floorPlanVersionId?: string | null;
+  isPublicPublished: boolean;
+  listingMode: 'BUY' | 'RENT';
+  monthlyRentInr?: number;
+  securityDepositInr?: number;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 8. parking_slots
+export type ParkingLevelType = 'BASEMENT' | 'PODIUM' | 'SURFACE' | 'STILT';
+export type ParkingSlotType = 'STANDARD' | 'TANDEM' | 'MECHANICAL' | 'EV' | 'ACCESSIBLE';
+export type ParkingSlotStatus = 'AVAILABLE' | 'ALLOCATED' | 'BLOCKED';
+
+export interface ParkingSlot {
+  id: string; // `${projectId}_${levelCode}_${slotNumber}`
+  orgId: string;
+  projectId: string;
+  towerId?: string | null;
+  levelType: ParkingLevelType;
+  levelName: string; // e.g., "B1", "B2", "P1"
+  zone: string; // e.g., "Zone A"
+  slotNumber: string; // Unique within project/level scheme
+  parkingType: ParkingSlotType;
+  priceInr: number;
+  status: ParkingSlotStatus;
+  allocatedUnitId?: string | null;
+  allocatedUnitNumber?: string | null;
+  allocatedBookingId?: string | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 9. parking_allocations
+export interface ParkingAllocation {
+  id: string;
+  orgId: string;
+  projectId: string;
+  slotId: string;
+  slotNumber: string;
+  unitId: string;
+  unitNumber: string;
+  bookingId?: string | null;
+  action: 'ALLOCATED' | 'RELEASED' | 'SWAPPED';
+  swappedWithSlotId?: string | null;
+  priceSnapshotInr: number;
+  performedByUid: string;
+  reason: string;
+  createdAt: ISODateString;
+}
+
+// 10. floor_plan_versions
+export interface FloorPlanVersion {
+  id: string;
+  orgId: string;
+  documentId: string;
+  projectId: string;
+  towerIds: string[];
+  floorCategory: FloorCategory;
+  minFloor: number;
+  maxFloor: number;
+  applicableUnitTypes: UnitType[];
+  applicableBhk: string[];
+  carpetAreaSqft: number;
+  saleableAreaSqft: number;
+  versionNumber: number;
+  storagePath: string;
+  fileName: string;
+  aiExtractedSpecs?: Record<string, unknown>;
+  createdByUid: string;
+  createdAt: ISODateString;
+}
+
+// 11. price_books & 12. price_rules
+export type PriceBookStatus =
+  | 'DRAFT'
+  | 'PENDING_APPROVAL'
+  | 'APPROVED'
+  | 'SCHEDULED'
+  | 'ACTIVE'
+  | 'ARCHIVED'
+  | 'REJECTED';
+
+export type ChargeCalculationBasis =
+  | 'PER_SQFT_SALEABLE'
+  | 'PER_SQFT_CARPET'
+  | 'FIXED_AMOUNT'
+  | 'PERCENTAGE_OF_BASE';
+
+export type TaxApplicabilityCategory =
+  | 'AGREEMENT_GST' // Standard residential GST (e.g., 5% or 1% affordable) or commercial GST (12%)
+  | 'OTHER_SERVICE_GST' // Separate service GST (e.g., 18% on maintenance / legal)
+  | 'EXEMPT_CORPUS'; // 0% GST (e.g., Corpus / Sinking fund deposit)
+
+export interface CostSheetLineItemRule {
+  id: string;
+  internalKey: string; // Stable immutable identifier (e.g. "amenities_charges", "custom_club_fee")
+  displayLabel: string; // Editable builder label (e.g. "Amenities & Infrastructure Development Charges")
+  description?: string;
+  basis: ChargeCalculationBasis;
+  amount: number; // Rate per sqft, fixed INR, or percentage
+  taxCategory: TaxApplicabilityCategory;
+  applicableUnitTypes?: UnitType[];
+  applicableBhk?: string[];
+  unitSpecificOverrides?: Record<string, number>;
+  isOptional: boolean;
+  isVisible: boolean;
+  isRemovable: boolean;
+  displayOrder: number;
+}
+
+export interface FloorRiseRule {
+  enabled: boolean;
+  startFloor: number; // Floor from which floor rise applies (inclusive)
+  ratePerFloorPerSqft: number;
+}
+
+export interface TaxConfiguration {
+  agreementGstPct: number; // e.g., 5
+  otherServiceGstPct: number; // e.g., 18
+  roundingMode: 'NEAREST_RUPEE' | 'EXACT_PAISE';
+  registrationDisclaimer: string;
+}
+
+export interface PriceBook {
+  id: string;
+  orgId: string;
+  projectId: string;
+  name: string;
+  description?: string;
+  versionNumber: number;
+  parentPriceBookId?: string | null;
+  status: PriceBookStatus;
+  isImmutable: boolean;
+  effectiveFrom: ISODateString;
+  expiresAt?: ISODateString | null;
+  basePricePerSqft: number;
+  floorRise: FloorRiseRule;
+  facingPremiumPerSqft: Partial<Record<FacingDirection, number>>;
+  viewPremiumPerSqft: Record<string, number>;
+  cornerPremiumPerSqft: number;
+  locationPremiumPerSqft: number;
+  unitSpecificPremiumInr: Record<string, number>;
+  parkingPricesByType: Record<ParkingSlotType, number>;
+  lineItems: CostSheetLineItemRule[];
+  taxConfig: TaxConfiguration;
+  maxDiscountPctWithoutApproval: number;
+  defaultPaymentPlanId?: string | null;
+  internalNotes?: string;
+  createdByUid: string;
+  approvedByUid?: string | null;
+  approvedAt?: ISODateString | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface PriceRule extends CostSheetLineItemRule {
+  orgId: string;
+  projectId: string;
+  priceBookId: string;
+  updatedAt: ISODateString;
+}
+
+// 13. price_revisions
+export interface PriceRevision {
+  id: string;
+  orgId: string;
+  projectId: string;
+  unitId?: string | null;
+  unitNumber?: string | null;
+  previousPriceBookId?: string | null;
+  newPriceBookId: string;
+  priceBookVersion: number;
+  oldBaseRate: number;
+  newBaseRate: number;
+  oldTotalValue: number;
+  newTotalValue: number;
+  changeAmount: number;
+  changePct: number;
+  effectiveDate: ISODateString;
+  changedByUid: string;
+  approvedByUid: string;
+  reason: string;
+  createdAt: ISODateString;
+}
+
+// 14. payment_plans
+export interface PaymentPlanMilestone {
+  sequence: number;
+  name: string;
+  description?: string;
+  percentage: number; // Reconciles across milestones to 100
+  fixedAmountOverrideInr?: number;
+  dueTrigger: string; // e.g. "On Booking", "Within 30 Days of Booking", "On Casting of 7th Floor Slab", "On Possession"
+  estimatedDate?: ISODateString;
+  taxTreatment: 'PROPORTIONAL_GST' | 'INCLUDE_POSSESSION_CHARGES';
+  notes?: string;
+}
+
+export interface PaymentPlan {
+  id: string;
+  orgId: string;
+  projectId: string;
+  name: string;
+  planType: 'CONSTRUCTION_LINKED' | 'DATE_LINKED' | 'DOWN_PAYMENT' | 'CUSTOM';
+  isActive: boolean;
+  milestones: PaymentPlanMilestone[];
+  totalPercentage: number;
+  createdByUid: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 15. quotations & 16. quotation_versions
+export interface ComputedLineItem {
+  internalKey: string;
+  displayLabel: string;
+  basis: ChargeCalculationBasis | 'SYSTEM_FORMULA';
+  rateOrInput: number;
+  baseAmountInr: number;
+  taxCategory: TaxApplicabilityCategory;
+  gstPct: number;
+  gstAmountInr: number;
+  totalWithGstInr: number;
+  displayOrder: number;
+}
+
+export interface ComputedMilestoneInstallment {
+  sequence: number;
+  name: string;
+  dueTrigger: string;
+  estimatedDate?: ISODateString;
+  percentage: number;
+  installmentBaseInr: number;
+  installmentGstInr: number;
+  possessionChargesWithGstInr: number;
+  totalInstallmentPayableInr: number;
+}
+
+export interface CostSheetBreakdown {
+  saleableAreaSqft: number;
+  carpetAreaSqft: number;
+  baseRatePerSqft: number;
+  basePriceInr: number;
+  floorRiseInr: number;
+  facingPremiumInr: number;
+  viewPremiumInr: number;
+  cornerPremiumInr: number;
+  locationPremiumInr: number;
+  unitSpecificPremiumInr: number;
+  parkingChargesInr: number;
+  grossAgreementComponentsInr: number;
+  discountAmountInr: number;
+  discountEffectivePct: number;
+  requiresDiscountApproval: boolean;
+  netAgreementValueBeforeGstInr: number; // Consideration value subject to Agreement GST (e.g. 5%)
+  agreementGstInr: number;
+  otherServiceChargesBeforeGstInr: number; // Subject to Service GST (e.g. 18%)
+  otherServiceGstInr: number;
+  exemptCorpusChargesInr: number; // 0% GST
+  totalBeforeTaxInr: number;
+  totalGstInr: number;
+  totalPayableInr: number; // Final payable INR
+  lineItems: ComputedLineItem[];
+  schedule: ComputedMilestoneInstallment[];
+  registrationDisclaimer: string;
+}
+
+export interface Quotation {
+  id: string;
+  orgId: string;
+  projectId: string;
+  towerId?: string | null;
+  floorId?: string | null;
+  unitId: string;
+  unitNumber: string;
+  quotationNumber: string;
+  currentVersion: number;
+  status:
+    | 'DRAFT'
+    | 'PENDING_APPROVAL'
+    | 'ISSUED'
+    | 'SHARED'
+    | 'ACCEPTED'
+    | 'EXPIRED'
+    | 'SUPERSEDED';
+  leadId?: string | null;
+  partnerOrgId?: string | null;
+  customer: {
+    name: string;
+    phone: string;
+    email?: string;
+    address?: string;
+  };
+  priceBookId: string;
+  priceBookVersion: number;
+  paymentPlanId: string;
+  selectedParkingSlotIds: string[];
+  parkingSlotsCount: number;
+  parkingTypeUsed: ParkingSlotType;
+  discount: {
+    type: 'NONE' | 'FIXED_INR' | 'PER_SQFT' | 'PERCENTAGE_OF_BASE';
+    value: number;
+    reason?: string;
+  };
+  breakdown: CostSheetBreakdown;
+  totalPayableInr: number;
+  validUntil: ISODateString;
+  termsAndConditions: string;
+  aiCustomerSummary?: string;
+  aiWhatsappShareText?: string;
+  latestPdfStoragePath?: string;
+  salesRepUid: string;
+  salesRepName: string;
+  approvedByUid?: string | null;
+  approvedAt?: ISODateString | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface QuotationVersion {
+  id: string; // `${quotationId}_v${version}`
+  orgId: string;
+  quotationId: string;
+  version: number;
+  priceBookSnapshot: PriceBook;
+  paymentPlanSnapshot: PaymentPlan;
+  breakdown: CostSheetBreakdown;
+  pdfStoragePath?: string;
+  createdByUid: string;
+  createdAt: ISODateString;
+}
+
+// 17. leads & 18. lead_activities
+export type LeadStage =
+  | 'NEW'
+  | 'CONTACTED'
+  | 'QUALIFIED'
+  | 'INTERESTED'
+  | 'VISIT_SCHEDULED'
+  | 'VISITED'
+  | 'NEGOTIATION'
+  | 'BOOKED'
+  | 'CLOSED'
+  | 'LOST'
+  | 'UNQUALIFIED';
+
+export type LeadSource =
+  | 'WEBSITE'
+  | 'PUBLIC_PORTAL'
+  | 'FACEBOOK_ADS'
+  | 'INSTAGRAM_ADS'
+  | 'INSTAGRAM_DM'
+  | 'MESSENGER'
+  | 'WHATSAPP'
+  | 'GOOGLE_ADS'
+  | 'CHANNEL_PARTNER'
+  | 'CSV_IMPORT'
+  | 'MANUAL'
+  | 'HOSTED_FORM'
+  | 'WEBHOOK';
+
+export interface Lead {
+  id: string;
+  orgId: string;
+  customerName: string;
+  phone: string;
+  normalizedPhone: string;
+  email?: string;
+  normalizedEmail?: string;
+  source: LeadSource;
+  campaign?: string;
+  budgetMinInr?: number;
+  budgetMaxInr?: number;
+  preferredLocation?: string;
+  preferredProjectIds: string[];
+  bhkPreference?: string;
+  propertyType?: ProjectType;
+  buyingTimeline?: 'IMMEDIATE' | '1_TO_3_MONTHS' | '3_TO_6_MONTHS' | '6_PLUS_MONTHS';
+  assignedAgentUid?: string | null;
+  partnerOrgId?: string | null;
+  partnerAgentUid?: string | null;
+  protectionExpiresAt?: ISODateString | null;
+  stage: LeadStage;
+  qualificationStatus: 'UNREVIEWED' | 'HOT' | 'WARM' | 'COLD' | 'DISQUALIFIED';
+  lostReason?: string;
+  leadScore: number;
+  duplicateOfLeadId?: string | null;
+  notesSummary?: string;
+  nextFollowUpAt?: ISODateString | null;
+  linkedQuotationIds: string[];
+  linkedBookingIds: string[];
+  whatsappOptIn: boolean;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface LeadActivity {
+  id: string;
+  orgId: string;
+  leadId: string;
+  type:
+    | 'NOTE'
+    | 'CALL'
+    | 'TASK'
+    | 'FOLLOW_UP'
+    | 'STAGE_CHANGE'
+    | 'ASSIGNMENT'
+    | 'WHATSAPP'
+    | 'VISIT'
+    | 'QUOTATION'
+    | 'AI_INSIGHT';
+  title: string;
+  body?: string;
+  dueAt?: ISODateString;
+  completedAt?: ISODateString | null;
+  performedByUid: string;
+  metadata?: Record<string, unknown>;
+  createdAt: ISODateString;
+}
+
+// 19. partner_organizations, 20. partner_members, 21. lead_registrations
+export interface PartnerBuilderScope {
+  orgId: string;
+  projectIds: string[];
+  commissionPct: number;
+  commissionTerms: string;
+  status: 'PENDING' | 'AUTHORIZED' | 'SUSPENDED';
+}
+
+export interface PartnerOrganization {
+  id: string;
+  companyName: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  registrationNumber?: string;
+  reraNumber?: string;
+  gstin?: string;
+  officeCity: string;
+  officeAddress?: string;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED';
+  authorizedOrgIds: string[];
+  builderScopes: Record<string, PartnerBuilderScope>;
+  metrics: {
+    registeredLeadsCount: number;
+    siteVisitsCount: number;
+    bookingsCount: number;
+    eligibleCommissionInr: number;
+    paidCommissionInr: number;
+  };
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface PartnerMember {
+  id: string; // `${partnerOrgId}_${uid}`
+  partnerOrgId: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  phone?: string;
+  role: 'CHANNEL_PARTNER_ADMIN' | 'CHANNEL_PARTNER_AGENT';
+  permissions: PermissionKey[];
+  status: 'INVITED' | 'ACTIVE' | 'SUSPENDED';
+  createdAt: ISODateString;
+}
+
+export interface LeadRegistration {
+  id: string; // `${orgId}_${projectId}_${phoneHash}`
+  orgId: string;
+  projectId: string;
+  leadId: string;
+  partnerOrgId: string;
+  partnerMemberUid: string;
+  customerName: string;
+  normalizedPhone: string;
+  source: 'CHANNEL_PARTNER';
+  status: 'PROTECTED' | 'DISPUTED' | 'EXPIRED' | 'CONVERTED' | 'REJECTED';
+  protectedUntil: ISODateString;
+  disputedByPartnerOrgId?: string | null;
+  conflictReason?: string;
+  resolvedByUid?: string | null;
+  resolutionNotes?: string;
+  registeredAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 22. conversations & 23. messages
+export interface Conversation {
+  id: string;
+  orgId: string;
+  leadId?: string | null;
+  customerPhone: string;
+  customerName: string;
+  channel: 'WHATSAPP' | 'INSTAGRAM_DM' | 'MESSENGER';
+  assignedAgentUid?: string | null;
+  status: 'OPEN' | 'PENDING_HANDOVER' | 'RESOLVED';
+  lastCustomerMessageAt?: ISODateString | null; // Determines 24h Meta customer-service window
+  optInStatus: 'OPTED_IN' | 'OPTED_OUT' | 'UNKNOWN';
+  unreadCount: number;
+  lastMessagePreview?: string;
+  updatedAt: ISODateString;
+  createdAt: ISODateString;
+}
+
+export interface Message {
+  id: string;
+  orgId: string;
+  conversationId: string;
+  leadId?: string | null;
+  direction: 'INBOUND' | 'OUTBOUND';
+  messageType: 'TEXT' | 'TEMPLATE' | 'DOCUMENT' | 'IMAGE' | 'AI_DRAFT';
+  content: string;
+  templateName?: string;
+  templateLanguage?: string;
+  documentId?: string;
+  quotationId?: string;
+  waMessageId?: string;
+  deliveryStatus:
+    | 'DRAFT_PENDING_APPROVAL'
+    | 'QUEUED'
+    | 'SENT'
+    | 'DELIVERED'
+    | 'READ'
+    | 'FAILED';
+  aiGenerated: boolean;
+  approvedByUid?: string | null;
+  sentByUid?: string | null;
+  errorDetails?: string;
+  createdAt: ISODateString;
+}
+
+// 24. site_visits
+export interface SiteVisit {
+  id: string;
+  orgId: string;
+  projectId: string;
+  unitId?: string | null;
+  leadId?: string | null;
+  partnerOrgId?: string | null;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  assignedAgentUid?: string | null;
+  scheduledStartAt: ISODateString; // UTC ISO
+  scheduledEndAt: ISODateString;
+  timezone: string;
+  status: 'SCHEDULED' | 'CONFIRMED' | 'RESCHEDULED' | 'COMPLETED' | 'NO_SHOW' | 'CANCELLED';
+  outcome?: 'VERY_INTERESTED' | 'SHORTLISTED' | 'PRICE_NEGOTIATION' | 'NOT_SUITABLE' | 'BOOKED';
+  notes?: string;
+  followUpAt?: ISODateString | null;
+  reminderJobKey: string; // Idempotency key
+  reminderSentAt?: ISODateString | null;
+  createdByUid?: string | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 25. bookings, 26. collection_records, 27. reconciliation_records
+export type BookingStatus =
+  | 'HOLD_REQUESTED'
+  | 'PENDING_APPROVAL'
+  | 'APPROVED'
+  | 'BOOKED'
+  | 'AGREEMENT_EXECUTED'
+  | 'REGISTERED'
+  | 'CANCELLED';
+
+export interface Booking {
+  id: string;
+  orgId: string;
+  bookingNumber: string;
+  projectId: string;
+  towerId?: string | null;
+  unitId: string;
+  unitNumber: string;
+  quotationId: string;
+  leadId: string;
+  partnerOrgId?: string | null;
+  customer: {
+    fullName: string;
+    coApplicantName?: string;
+    phone: string;
+    email: string;
+    panNumber?: string;
+    aadhaarLast4?: string;
+    permanentAddress: string;
+  };
+  allocatedParkingSlotIds: string[];
+  agreementValueInr: number;
+  totalPayableInr: number;
+  tokenAmountExpectedInr: number;
+  totalCollectedVerifiedInr: number;
+  outstandingBalanceInr: number;
+  status: BookingStatus;
+  cancellationReason?: string;
+  requestedByUid: string;
+  approvedByUid?: string | null;
+  bookedAt?: ISODateString | null;
+  cancelledAt?: ISODateString | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CollectionRecord {
+  id: string;
+  orgId: string;
+  bookingId: string;
+  projectId: string;
+  unitId: string;
+  recordType: 'TOKEN' | 'MILESTONE_DEMAND' | 'RECEIPT' | 'PARTIAL_PAYMENT' | 'REFUND';
+  milestoneSequence?: number;
+  milestoneName: string;
+  demandAmountInr: number;
+  paidAmountInr: number;
+  allocatedAmountInr: number;
+  paymentMode: 'RAZORPAY' | 'NEFT' | 'RTGS' | 'IMPS' | 'CHEQUE' | 'DD';
+  instrumentRef?: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  razorpaySignatureVerified: boolean;
+  receiptNumber?: string;
+  status: 'DUE' | 'PENDING_VERIFICATION' | 'VERIFIED' | 'BOUNCED' | 'REFUNDED';
+  dueDate?: ISODateString;
+  paidAt?: ISODateString;
+  recordedByUid: string;
+  notes?: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface ReconciliationRecord {
+  id: string;
+  orgId: string;
+  bookingId: string;
+  collectionRecordId: string;
+  bankStatementRef: string;
+  settlementId?: string;
+  expectedAmountInr: number;
+  settledAmountInr: number;
+  gatewayFeeInr: number;
+  discrepancyAmountInr: number;
+  status: 'MATCHED' | 'DISCREPANCY' | 'RESOLVED';
+  reconciledByUid: string;
+  notes?: string;
+  reconciledAt: ISODateString;
+}
+
+// 28. documents
+export type DocumentCategory =
+  | 'MASTER_PLAN'
+  | 'TOWER_PLAN'
+  | 'FLOOR_PLAN'
+  | 'UNIT_LAYOUT'
+  | 'BROCHURE'
+  | 'PRICE_SHEET'
+  | 'RERA_DOC'
+  | 'APPROVAL_FILE'
+  | 'COST_SHEET'
+  | 'BOOKING_DOC'
+  | 'PAYMENT_RECEIPT';
+
+export interface DocumentRecord {
+  id: string;
+  orgId: string;
+  projectId?: string | null;
+  towerId?: string | null;
+  floorId?: string | null;
+  unitId?: string | null;
+  category: DocumentCategory;
+  title: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath: string;
+  currentVersion: number;
+  versionHistory: Array<{
+    version: number;
+    storagePath: string;
+    fileName: string;
+    uploadedByUid: string;
+    uploadedAt: ISODateString;
+  }>;
+  visibility: 'INTERNAL' | 'PARTNER' | 'CUSTOMER' | 'PUBLIC';
+  watermarkEnabled: boolean;
+  shareLinks: Array<{
+    tokenId: string;
+    expiresAt: ISODateString;
+    createdByUid: string;
+    revoked: boolean;
+  }>;
+  uploadedByUid: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+// 29. forms & 30. form_submissions
+export type FormFieldType =
+  | 'TEXT'
+  | 'NUMBER'
+  | 'PHONE'
+  | 'EMAIL'
+  | 'DROPDOWN'
+  | 'CHECKBOX'
+  | 'RADIO'
+  | 'DATE'
+  | 'BUDGET'
+  | 'PROPERTY_INTEREST'
+  | 'PROJECT_SELECTOR'
+  | 'BHK';
+
+export interface FormFieldCondition {
+  dependsOnFieldId: string;
+  equalsValue: string;
+}
+
+export interface FormFieldDefinition {
+  id: string;
+  type: FormFieldType;
+  label: string;
+  placeholder?: string;
+  required: boolean;
+  options?: string[];
+  condition?: FormFieldCondition;
+  order: number;
+}
+
+export interface LeadCaptureForm {
+  id: string;
+  orgId: string;
+  projectId?: string | null;
+  name: string;
+  slug: string;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  fields: FormFieldDefinition[];
+  branding: {
+    headline: string;
+    description?: string;
+    accentColor: string;
+    logoUrl?: string;
+  };
+  consentText: string;
+  successMessage: string;
+  assignToAgentUid?: string | null;
+  honeypotEnabled: boolean;
+  rateLimitPerHour: number;
+  viewsCount: number;
+  submissionsCount: number;
+  createdByUid: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface FormSubmission {
+  id: string;
+  orgId: string;
+  formId: string;
+  projectId?: string | null;
+  values: Record<string, unknown>;
+  consentAccepted: boolean;
+  resultingLeadId: string;
+  isDuplicate: boolean;
+  ipHash: string;
+  submittedAt: ISODateString;
+}
+
+// 31. integrations
+export type IntegrationProvider =
+  | 'OPENAI'
+  | 'WHATSAPP_CLOUD'
+  | 'META_LEAD_ADS'
+  | 'INSTAGRAM'
+  | 'GOOGLE_ADS'
+  | 'RAZORPAY_COLLECTIONS'
+  | 'GOOGLE_MAPS'
+  | 'EMAIL';
+
+export interface IntegrationConfig {
+  id: string;
+  orgId: string;
+  provider: IntegrationProvider;
+  status: 'NOT_CONFIGURED' | 'CONFIGURED_UNTESTED' | 'VERIFIED_ACTIVE' | 'ERROR';
+  publicMetadata: Record<string, string>; // Non-secret identifiers ONLY (e.g., phoneNumberId, pageId)
+  lastVerifiedAt?: ISODateString | null;
+  lastWebhookAt?: ISODateString | null;
+  lastError?: string | null;
+  updatedByUid: string;
+  updatedAt: ISODateString;
+}
+
+// 32. subscriptions & 33. invoices
+export interface Subscription {
+  id: string; // `${orgId}`
+  orgId: string;
+  planCode: SaasPlanCode;
+  billingCycle: 'MONTHLY' | 'ANNUAL';
+  basePriceInr: number;
+  onboardingFeePaid: boolean;
+  status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'CANCELLED';
+  entitlements: {
+    maxProjects: number;
+    maxUsers: number;
+    monthlyAiCredits: number;
+    monthlyWhatsappQuota: number;
+  };
+  usageThisCycle: {
+    projectsCount: number;
+    activeUsersCount: number;
+    aiCreditsUsed: number;
+    whatsappMessagesSent: number;
+  };
+  addons: {
+    extraUsers: number;
+    extraProjects: number;
+    extraAiCredits: number;
+    extraWhatsappQuota: number;
+  };
+  razorpaySubscriptionId?: string;
+  currentPeriodStart: ISODateString;
+  currentPeriodEnd: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface SaasInvoice {
+  id: string;
+  orgId: string;
+  invoiceNumber: string;
+  subscriptionId: string;
+  billingReason: 'SUBSCRIPTION' | 'ONBOARDING' | 'ADDON' | 'RENEWAL';
+  subtotalInr: number;
+  gstInr: number;
+  totalInr: number;
+  status: 'DRAFT' | 'ISSUED' | 'PAID' | 'VOID';
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  razorpaySignatureVerified: boolean;
+  issuedAt: ISODateString;
+  paidAt?: ISODateString | null;
+  pdfStoragePath?: string;
+}
+
+// 34. ai_usage_logs
+export type AiFeatureTask =
+  | 'LEAD_QUALIFICATION'
+  | 'BUYER_REQUIREMENT_EXTRACTION'
+  | 'PROPERTY_MATCHING'
+  | 'WHATSAPP_REPLY_DRAFT'
+  | 'COST_SHEET_EXPLANATION'
+  | 'FLOOR_PLAN_ANALYSIS'
+  | 'BROCHURE_SUMMARIZATION'
+  | 'PRICE_COMPARISON_EXPLANATION'
+  | 'MARKET_INTELLIGENCE'
+  | 'NEGOTIATION_ASSISTANCE'
+  | 'SALES_PERFORMANCE_INSIGHTS'
+  | 'FOLLOW_UP_RECOMMENDATIONS'
+  | 'DOCUMENT_INFO_EXTRACTION'
+  | 'ADMIN_NL_REPORT';
+
+export interface AiUsageLog {
+  id: string;
+  orgId: string;
+  uid: string;
+  feature: AiFeatureTask;
+  model: string;
+  promptVersion: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  creditsConsumed: number;
+  entityType?: string;
+  entityId?: string;
+  latencyMs: number;
+  status: 'SUCCESS' | 'BUDGET_BLOCKED' | 'UNCONFIGURED' | 'ERROR';
+  createdAt: ISODateString;
+}
+
+// 35. approvals
+export interface ApprovalRequest {
+  id: string;
+  orgId: string;
+  entityType:
+    | 'PRICE_BOOK'
+    | 'QUOTATION_DISCOUNT'
+    | 'BOOKING'
+    | 'BOOKING_CANCELLATION'
+    | 'INVENTORY_RELEASE';
+  entityId: string;
+  projectId?: string | null;
+  requestedByUid: string;
+  requestedByName: string;
+  requiredPermission: PermissionKey;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  requestSummary: string;
+  payloadSnapshot: Record<string, unknown>;
+  decidedByUid?: string | null;
+  decisionNotes?: string;
+  decidedAt?: ISODateString | null;
+  createdAt: ISODateString;
+}
+
+// 36. audit_events
+export type AuditCategory =
+  | 'PRICING'
+  | 'INVENTORY'
+  | 'PARKING'
+  | 'DISCOUNT'
+  | 'APPROVAL'
+  | 'BOOKING'
+  | 'PAYMENT'
+  | 'DOCUMENT'
+  | 'PERMISSION'
+  | 'AUTH'
+  | 'BILLING'
+  | 'AI'
+  | 'SYSTEM';
+
+export interface AuditEvent {
+  id: string;
+  orgId: string; // Tenant orgId or 'PLATFORM'
+  actorUid: string;
+  actorEmail?: string;
+  actorRole?: string;
+  action: string;
+  category: AuditCategory;
+  entityType: string;
+  entityId: string;
+  summary: string;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  createdAt: ISODateString;
+}

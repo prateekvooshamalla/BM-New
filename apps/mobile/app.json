@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Bharat Makaan",
+    "slug": "bharat-makaan",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.bharatmakaan.enterprise"
+    },
+    "android": {
+      "package": "com.bharatmakaan.enterprise"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "color": "#0F265C"
+        }
+      ],
+      "expo-image-picker",
+      "expo-document-picker"
+    ]
+  }
+}

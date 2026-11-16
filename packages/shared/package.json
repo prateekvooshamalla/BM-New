@@ -1,0 +1,24 @@
+{
+  "name": "@bharat-makaan/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@bharat-makaan/config": "workspace:*"
+  },
+  "scripts": {
+    "build": "../../node_modules/.bin/tsup src/index.ts --format cjs,esm --dts --clean",
+    "typecheck": "../../node_modules/.bin/tsc -p tsconfig.json --noEmit"
+  }
+}

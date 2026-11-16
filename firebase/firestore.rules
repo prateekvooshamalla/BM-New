@@ -1,0 +1,330 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Helper Functions — Multi-Tenant RBAC & Granular Permission Checks
+    // =========================================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.platformRole == 'PLATFORM_SUPER_ADMIN';
+    }
+
+    function memberDocPath(orgId) {
+      return /databases/$(database)/documents/organization_members/$(orgId + '_' + request.auth.uid);
+    }
+
+    function hasActiveOrgMembership(orgId) {
+      return isSignedIn()
+        && exists(memberDocPath(orgId))
+        && get(memberDocPath(orgId)).data.status == 'ACTIVE';
+    }
+
+    function hasOrgPermission(orgId, permission) {
+      return isSuperAdmin()
+        || (
+          hasActiveOrgMembership(orgId)
+          && permission in get(memberDocPath(orgId)).data.permissions
+        );
+    }
+
+    function hasProjectScopedPermission(orgId, permission, projectId) {
+      return isSuperAdmin()
+        || (
+          hasActiveOrgMembership(orgId)
+          && permission in get(memberDocPath(orgId)).data.permissions
+          && (
+            get(memberDocPath(orgId)).data.role in ['BUILDER_ADMIN', 'PROJECT_DIRECTOR']
+            || get(memberDocPath(orgId)).data.assignedProjectIds.size() == 0
+            || projectId in get(memberDocPath(orgId)).data.assignedProjectIds
+          )
+        );
+    }
+
+    function partnerMemberDocPath(partnerOrgId) {
+      return /databases/$(database)/documents/partner_members/$(partnerOrgId + '_' + request.auth.uid);
+    }
+
+    function isActivePartnerMember(partnerOrgId) {
+      return isSignedIn()
+        && exists(partnerMemberDocPath(partnerOrgId))
+        && get(partnerMemberDocPath(partnerOrgId)).data.status == 'ACTIVE';
+    }
+
+    // =========================================================================
+    // Server-Only Secret Vault — NEVER readable or writable by clients
+    // =========================================================================
+    match /_integration_secrets/{secretId} {
+      allow read, write: if false;
+    }
+
+    match /_rate_limits/{key} {
+      allow read, write: if false;
+    }
+
+    match /_webhook_events/{eventId} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // 1. organizations & 2. organization_members
+    // =========================================================================
+    match /organizations/{orgId} {
+      allow read: if isSuperAdmin() || hasActiveOrgMembership(orgId) || resource.data.status == 'ACTIVE';
+      // Organization creation & suspension go through Cloud Functions for atomic membership + subscription setup
+      allow create: if false;
+      allow update: if isSuperAdmin()
+        || (
+          hasOrgPermission(orgId, 'org:manage')
+          && request.resource.data.subscriptionPlanId == resource.data.subscriptionPlanId
+          && request.resource.data.status == resource.data.status
+        );
+      allow delete: if false;
+    }
+
+    match /organization_members/{memberId} {
+      allow read: if isSuperAdmin()
+        || (isSignedIn() && resource.data.uid == request.auth.uid)
+        || hasOrgPermission(resource.data.orgId, 'staff:view');
+      // Privileged membership/permission writes execute through verified Cloud Functions + Audit Log
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 3. projects, 4. project_phases, 5. towers, 6. floors, 7. units
+    // =========================================================================
+    match /projects/{projectId} {
+      allow read: if resource.data.isPublicPublished == true
+        || hasProjectScopedPermission(resource.data.orgId, 'projects:view', projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /project_phases/{phaseId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /towers/{towerId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /floors/{floorId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /units/{unitId} {
+      allow read: if resource.data.isPublicPublished == true
+        || hasProjectScopedPermission(resource.data.orgId, 'inventory:view', resource.data.projectId);
+      // All unit creation & reservation/booking status transitions MUST use server transactions
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 8. parking_slots & 9. parking_allocations
+    // =========================================================================
+    match /parking_slots/{slotId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'parking:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /parking_allocations/{allocationId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'parking:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 10. floor_plan_versions & 28. documents
+    // =========================================================================
+    match /floor_plan_versions/{versionId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'documents:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /documents/{documentId} {
+      allow read: if resource.data.visibility == 'PUBLIC'
+        || hasOrgPermission(resource.data.orgId, 'documents:view');
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 11. price_books, 12. price_rules, 13. price_revisions, 14. payment_plans
+    // =========================================================================
+    match /price_books/{priceBookId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /price_rules/{ruleId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /price_revisions/{revisionId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /payment_plans/{planId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'pricing:view', resource.data.projectId)
+        || hasProjectScopedPermission(resource.data.orgId, 'quotations:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 15. quotations & 16. quotation_versions
+    // =========================================================================
+    match /quotations/{quotationId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'quotations:view', resource.data.projectId)
+        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow create, update, delete: if false;
+    }
+
+    match /quotation_versions/{versionId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'quotations:view');
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 17. leads & 18. lead_activities
+    // =========================================================================
+    match /leads/{leadId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'leads:view_all')
+        || (
+          hasOrgPermission(resource.data.orgId, 'leads:view')
+          && resource.data.assignedAgentUid == request.auth.uid
+        )
+        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow create, update, delete: if false;
+    }
+
+    match /lead_activities/{activityId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'leads:view');
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 19. partner_organizations, 20. partner_members, 21. lead_registrations
+    // =========================================================================
+    match /partner_organizations/{partnerOrgId} {
+      allow read: if isSuperAdmin()
+        || isActivePartnerMember(partnerOrgId)
+        || (isSignedIn() && resource.data.authorizedOrgIds.size() > 0);
+      allow create, update, delete: if false;
+    }
+
+    match /partner_members/{partnerMemberId} {
+      allow read: if isSuperAdmin()
+        || (isSignedIn() && resource.data.uid == request.auth.uid)
+        || isActivePartnerMember(resource.data.partnerOrgId);
+      allow create, update, delete: if false;
+    }
+
+    match /lead_registrations/{regId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'partners:view')
+        || isActivePartnerMember(resource.data.partnerOrgId);
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 22. conversations, 23. messages, 24. site_visits
+    // =========================================================================
+    match /conversations/{conversationId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'whatsapp:view');
+      allow create, update, delete: if false;
+    }
+
+    match /messages/{messageId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'whatsapp:view');
+      allow create, update, delete: if false;
+    }
+
+    match /site_visits/{visitId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'visits:view', resource.data.projectId)
+        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 25. bookings, 26. collection_records, 27. reconciliation_records
+    // =========================================================================
+    match /bookings/{bookingId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'bookings:view', resource.data.projectId)
+        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow create, update, delete: if false;
+    }
+
+    match /collection_records/{collectionId} {
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'collections:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /reconciliation_records/{reconciliationId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'collections:reconcile');
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 29. forms & 30. form_submissions
+    // =========================================================================
+    match /forms/{formId} {
+      allow read: if resource.data.status == 'PUBLISHED'
+        || hasOrgPermission(resource.data.orgId, 'forms:manage')
+        || hasOrgPermission(resource.data.orgId, 'leads:view');
+      allow create, update, delete: if false;
+    }
+
+    match /form_submissions/{submissionId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'forms:manage')
+        || hasOrgPermission(resource.data.orgId, 'leads:view_all');
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 31. integrations, 32. subscriptions, 33. invoices, 34. ai_usage_logs,
+    // 35. approvals, 36. audit_events & platform support
+    // =========================================================================
+    match /integrations/{integrationId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'settings:view');
+      allow create, update, delete: if false;
+    }
+
+    match /subscriptions/{orgId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(orgId, 'billing:view') || hasOrgPermission(orgId, 'settings:view');
+      allow create, update, delete: if false;
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'billing:view');
+      allow create, update, delete: if false;
+    }
+
+    match /ai_usage_logs/{logId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'reports:view');
+      allow create, update, delete: if false;
+    }
+
+    match /approvals/{approvalId} {
+      allow read: if hasOrgPermission(resource.data.orgId, 'approvals:decide')
+        || (isSignedIn() && resource.data.requestedByUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /audit_events/{auditId} {
+      allow read: if isSuperAdmin()
+        || (resource.data.orgId != 'PLATFORM' && hasOrgPermission(resource.data.orgId, 'audit:view'));
+      // Strictly append-only from server-side functions; NEVER mutable or deletable
+      allow create, update, delete: if false;
+    }
+
+    match /support_requests/{ticketId} {
+      allow read: if isSuperAdmin() || (isSignedIn() && resource.data.createdByUid == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+  }
+}

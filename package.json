@@ -1,0 +1,37 @@
+{
+  "name": "bharat-makaan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bharat Makaan — AI-powered enterprise real estate management platform & public property portal",
+  "packageManager": "pnpm@12.4.1",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @bharat-makaan/web dev",
+    "dev:mobile": "pnpm --filter @bharat-makaan/mobile start",
+    "build": "pnpm --filter @bharat-makaan/config build && pnpm --filter @bharat-makaan/shared build && pnpm --filter @bharat-makaan/validation build && pnpm --filter @bharat-makaan/functions build && pnpm --filter @bharat-makaan/web build",
+    "build:packages": "pnpm --filter @bharat-makaan/config build && pnpm --filter @bharat-makaan/shared build && pnpm --filter @bharat-makaan/validation build",
+    "build:web": "pnpm --filter @bharat-makaan/web build",
+    "build:functions": "pnpm --filter @bharat-makaan/functions build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint packages apps/web/src apps/mobile/src functions/src tests scripts",
+    "test": "pnpm --filter @bharat-makaan/tests test",
+    "test:emulator": "pnpm --filter @bharat-makaan/tests test:emulator",
+    "provision:super-admin": "tsx scripts/provision-super-admin.ts",
+    "generate:sitemap": "tsx scripts/generate-sitemap.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^9.18.0",
+    "firebase-admin": "^13.0.2",
+    "tsx": "^4.19.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@bharat-makaan/tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts",
+    "test:emulator": "vitest run --config vitest.emulator.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@bharat-makaan/config": "workspace:*",
+    "@bharat-makaan/functions": "workspace:*",
+    "@bharat-makaan/shared": "workspace:*",
+    "@bharat-makaan/validation": "workspace:*",
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase-admin": "^13.0.2",
+    "pdf-lib": "^1.17.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

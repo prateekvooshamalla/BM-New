@@ -1,0 +1,30 @@
+{
+  "name": "@bharat-makaan/functions",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": "22"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "../node_modules/.bin/tsup src/index.ts --format cjs --out-dir lib --clean --external firebase-admin --external firebase-functions",
+    "typecheck": "./node_modules/.bin/tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@bharat-makaan/config": "workspace:*",
+    "@bharat-makaan/shared": "workspace:*",
+    "@bharat-makaan/validation": "workspace:*",
+    "firebase-admin": "^13.0.2",
+    "firebase-functions": "^6.3.1",
+    "nodemailer": "^6.10.0",
+    "openai": "^4.82.0",
+    "pdf-lib": "^1.17.1",
+    "razorpay": "^2.9.6",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/nodemailer": "^6.4.17",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,54 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.platformRole == 'PLATFORM_SUPER_ADMIN';
+    }
+
+    function memberDoc(orgId) {
+      return firestore.get(/databases/(default)/documents/organization_members/$(orgId + '_' + request.auth.uid));
+    }
+
+    function hasOrgStoragePermission(orgId, perm) {
+      return isSuperAdmin()
+        || (
+          isSignedIn()
+          && memberDoc(orgId).data != null
+          && memberDoc(orgId).data.status == 'ACTIVE'
+          && perm in memberDoc(orgId).data.permissions
+        );
+    }
+
+    function isAllowedContentType() {
+      return request.resource.contentType.matches('application/pdf')
+        || request.resource.contentType.matches('image/png')
+        || request.resource.contentType.matches('image/jpeg')
+        || request.resource.contentType.matches('image/webp');
+    }
+
+    function isWithinSizeLimit() {
+      return request.resource.size <= 25 * 1024 * 1024;
+    }
+
+    // Approved public listing media
+    match /public-listings/{orgId}/{projectId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if hasOrgStoragePermission(orgId, 'documents:upload')
+        && isAllowedContentType()
+        && isWithinSizeLimit();
+    }
+
+    // Multi-tenant organization private repository
+    match /organizations/{orgId}/{allPaths=**} {
+      allow read: if hasOrgStoragePermission(orgId, 'documents:view');
+      allow write: if hasOrgStoragePermission(orgId, 'documents:upload')
+        && isAllowedContentType()
+        && isWithinSizeLimit();
+    }
+  }
+}
