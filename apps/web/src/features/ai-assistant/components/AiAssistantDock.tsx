@@ -467,10 +467,6 @@ export function AiAssistantDock({ partnerContext }: AiAssistantDockProps) {
         'Summarize leads for this project',
       ];
 
-  if (!effectiveOrgId) {
-    return null;
-  }
-
   return (
     <>
       {/* Floating Corner Launcher when closed */}
@@ -587,7 +583,19 @@ export function AiAssistantDock({ partnerContext }: AiAssistantDockProps) {
             <span>Screen: {location.pathname}</span>
           </div>
 
-          {tab === 'history' ? (
+          {!effectiveOrgId ? (
+            <div className="flex flex-1 flex-col items-center justify-center p-6 text-center space-y-3">
+              <Sparkles className="h-8 w-8 text-primary/70" />
+              <div className="text-sm font-semibold text-foreground">
+                Select or Create an Organization First
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                AI sessions, floor-plan extractions, and staged inventory drafts are strictly
+                isolated by builder/agency organization. Use &ldquo;Create Builder
+                Organization&rdquo; in the left sidebar to begin.
+              </p>
+            </div>
+          ) : tab === 'history' ? (
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
               <div className="text-xs font-semibold text-foreground">
                 Recent AI Sessions ({historySessions.length})

@@ -209,26 +209,40 @@ export function EnterpriseLayout() {
           </div>
         ))}
 
-        {/* Role-Specific Console Switchers */}
-        {(isSuperAdmin || partnerMemberships.length > 0) && (
-          <div className="border-t border-sidebar-border pt-3 space-y-1">
-            <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Dedicated Consoles
-            </div>
-            {partnerMemberships.length > 0 && (
-              <NavLink to="/partner/dashboard" className="bm-nav-item">
-                <Handshake className="h-4 w-4 text-muted-foreground" />
-                <span>Partner Agency Portal</span>
-              </NavLink>
-            )}
-            {isSuperAdmin && (
-              <NavLink to="/super-admin" className="bm-nav-item">
-                <ShieldCheck className="h-4 w-4 text-primary" />
-                <span>Platform Super Admin</span>
-              </NavLink>
-            )}
+        {/* AI Workspace & Dedicated Console Switchers */}
+        <div className="border-t border-sidebar-border pt-3 space-y-1">
+          <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            AI &amp; Dedicated Consoles
           </div>
-        )}
+          <NavLink
+            to="/app/ai-studio"
+            onClick={() => setMobileMenuOpen(false)}
+            className={({ isActive }) =>
+              `bm-nav-item ${isActive ? 'bg-sidebar-active text-sidebar-active-foreground font-semibold' : ''}`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <Sparkles
+                  className={`h-4 w-4 shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
+                />
+                <span>AI Floor-Plan Studio</span>
+              </>
+            )}
+          </NavLink>
+          {partnerMemberships.length > 0 && (
+            <NavLink to="/partner/dashboard" className="bm-nav-item">
+              <Handshake className="h-4 w-4 text-muted-foreground" />
+              <span>Partner Agency Portal</span>
+            </NavLink>
+          )}
+          {isSuperAdmin && (
+            <NavLink to="/super-admin" className="bm-nav-item">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              <span>Platform Super Admin</span>
+            </NavLink>
+          )}
+        </div>
       </nav>
 
       {/* Footer User Strip */}
@@ -331,18 +345,16 @@ export function EnterpriseLayout() {
           </div>
 
           <div className="flex items-center gap-2">
-            {activeOrgId && (
-              <Button
-                type="button"
-                variant={aiDrawerOpen ? 'default' : 'outline'}
-                size="sm"
-                className="h-8 gap-1.5 text-xs"
-                onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>AI Assistant</span>
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant={aiDrawerOpen ? 'default' : 'outline'}
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>AI Assistant</span>
+            </Button>
             <Link
               to="/"
               className="hidden text-xs font-medium text-muted-foreground hover:text-foreground sm:inline px-2"

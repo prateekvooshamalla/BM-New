@@ -149,6 +149,7 @@ export function AppRouter() {
             <Route path="reports" element={<ReportsAndAuditPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="ai-studio" element={<AiInventoryStudioPage />} />
+            <Route path="ai-assistant" element={<AiInventoryStudioPage />} />
             <Route path="*" element={<DashboardPage />} />
           </Route>
 
