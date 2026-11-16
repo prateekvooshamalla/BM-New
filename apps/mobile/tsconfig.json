@@ -12,5 +12,5 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["App.tsx", "src/**/*", "nativewind-env.d.ts"]
+  "include": ["App.tsx", "app.config.ts", "src/**/*", "nativewind-env.d.ts"]
 }
