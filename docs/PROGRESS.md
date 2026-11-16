@@ -10,6 +10,6 @@
 | **Phase 5** | Sales Operations (CRM, Channel Partners, WhatsApp Inbox, Visits) | Completed | Typecheck, 14/14 tests (CRM dedup, partner lead protection & conflict resolution, WhatsApp HMAC/24h/AI gate, site visits), Web + Functions builds passed | `e5efd83` |
 | **Phase 6** | Booking & Finance (Holds, Bookings, Collections, Razorpay, Ledger) | Completed | Typecheck, 15/15 tests (double-booking lock, Razorpay HMAC verification, settlement reconciliation, cancellation release), Web + Functions builds passed | `06dd637` |
 | **Phase 7** | Lead Capture & AI (Drag-Drop Form Builder, Ad Webhooks, OpenAI 14 Tasks) | Completed | Typecheck, 17/17 tests (drag-drop form builder, honeypot/rate-limit, Meta/Google webhooks, OpenAI 14 tasks & credit guard), Web + Functions builds passed | `74e9acd` |
-| **Phase 8** | Public Property Portal (13+ Routes, Comparison, Enquiries, SEO) | Completed | Typecheck, 18/18 tests (SEO sitemap, exact hero copy, strict isPublicPublished filtering, real comparison matrix), Web + Functions builds passed | Ready to commit |
-| **Phase 9** | Mobile App (Expo + React Native + NativeWind, 5 Bottom Tabs, Sync) | In Progress | — | — |
-| **Phase 10** | Super Admin, SaaS Billing, Reports & Audit, Full QA & Deployment Docs | Pending | — | — |
+| **Phase 8** | Public Property Portal (13+ Routes, Comparison, Enquiries, SEO) | Completed | Typecheck, 18/18 tests (SEO sitemap, exact hero copy, strict isPublicPublished filtering, real comparison matrix), Web + Functions builds passed | `fe7bf40` |
+| **Phase 9** | Mobile App (Expo + React Native + NativeWind, 5 Bottom Tabs, Sync) | Completed | Typecheck (incl. apps/mobile), 19/19 tests (role-gated More menu, SecureStore, media/PDF upload, push notifications, web/mobile sync), builds passed | Ready to commit |
+| **Phase 10** | Super Admin, SaaS Billing, Reports & Audit, Full QA & Deployment Docs | In Progress | — | — |
