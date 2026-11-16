@@ -10,3 +10,5 @@ export * from './inventory';
 export * from './parking';
 export * from './approvals';
 export * from './pricing';
+export * from './quotations';
+export * from './documents';

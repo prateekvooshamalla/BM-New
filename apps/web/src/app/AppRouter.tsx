@@ -5,6 +5,7 @@ import { DashboardPage } from '@/features/dashboard/pages/DashboardPage';
 import { ProjectsAndInventoryPage } from '@/features/inventory/pages/ProjectsAndInventoryPage';
 import { ParkingPage } from '@/features/parking/pages/ParkingPage';
 import { PricingAndCostSheetsPage } from '@/features/pricing/pages/PricingAndCostSheetsPage';
+import { DocumentsPage } from '@/features/documents/pages/DocumentsPage';
 import { SettingsPage } from '@/features/settings/pages/SettingsPage';
 
 export function AppRouter() {
@@ -22,6 +23,7 @@ export function AppRouter() {
           <Route path="parking" element={<ParkingPage />} />
           <Route path="pricing" element={<PricingAndCostSheetsPage />} />
           <Route path="quotations" element={<PricingAndCostSheetsPage />} />
+          <Route path="documents" element={<DocumentsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<DashboardPage />} />
         </Route>

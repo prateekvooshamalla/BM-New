@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { PriceBookManagerPanel } from '@/features/pricing/components/PriceBookManagerPanel';
+import { CostSheetGeneratorPanel } from '@/features/quotations/components/CostSheetGeneratorPanel';
 
 export function PricingAndCostSheetsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -63,9 +64,7 @@ export function PricingAndCostSheetsPage() {
         </TabsContent>
 
         <TabsContent value="quotations">
-          <div id="cost-sheet-slot" className="text-xs text-muted-foreground">
-            Select an approved price book to generate quotations.
-          </div>
+          <CostSheetGeneratorPanel projectId={currentProjectId} />
         </TabsContent>
       </Tabs>
     </div>
