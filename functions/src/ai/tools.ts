@@ -1,6 +1,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import {
+  DEFAULT_ROLE_PERMISSIONS,
   buildProposedUnitsFromTemplates,
   calculateCostSheet,
   hasPermission,
@@ -87,7 +88,9 @@ export async function verifyAiSubjectPermission(params: {
       throw new HttpsError('permission-denied', 'Active channel partner membership required.');
     }
     const pm = pmSnap.data() as PartnerMember;
-    if (!pm.permissions.includes(requiredPermission)) {
+    const effectivePartnerPerms =
+      pm.permissions ?? DEFAULT_ROLE_PERMISSIONS[pm.role] ?? [];
+    if (!effectivePartnerPerms.includes(requiredPermission)) {
       throw new HttpsError(
         'permission-denied',
         `Channel partner lacks permission: ${requiredPermission}`

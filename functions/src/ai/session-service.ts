@@ -1252,7 +1252,7 @@ export async function updateAiInventoryDraftService(
     throw new HttpsError('failed-precondition', 'Committed drafts cannot be modified.');
   }
 
-  let nextTowerSpec = {
+  const nextTowerSpec = {
     ...existing.towerSpec,
     ...(input.towerSpecPatch ?? {}),
   };

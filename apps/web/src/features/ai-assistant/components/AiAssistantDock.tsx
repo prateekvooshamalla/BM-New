@@ -244,8 +244,14 @@ export function AiAssistantDock({ partnerContext }: AiAssistantDockProps) {
           any,
           {
             session: AiAssistantSession;
+            replyMessage?: {
+              queryResults?: {
+                kind: string;
+                count: number;
+                items: Array<Record<string, unknown>>;
+              };
+            };
             draft: AiInventoryDraft | null;
-            queryResult?: Record<string, unknown>;
           }
         >('sendAiAssistantMessage', {
           orgId: effectiveOrgId,
@@ -265,8 +271,14 @@ export function AiAssistantDock({ partnerContext }: AiAssistantDockProps) {
         if (res.draft) {
           setDraft(res.draft);
         }
-        if (res.queryResult) {
-          setLatestQueryResult(res.queryResult);
+        if (
+          res.replyMessage?.queryResults?.items &&
+          (res.replyMessage.queryResults.kind === 'UNITS' ||
+            res.replyMessage.queryResults.kind === 'MISSING_FLOOR_PLAN_UNITS')
+        ) {
+          setLatestQueryResult({ units: res.replyMessage.queryResults.items });
+        } else {
+          setLatestQueryResult(null);
         }
         setMessageInput('');
       } catch (err) {

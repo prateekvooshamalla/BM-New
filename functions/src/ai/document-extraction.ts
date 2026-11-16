@@ -296,7 +296,7 @@ function parseStructuredHintsFromPages(pages: ParsedPageContent[]): VisionExtrac
       totalFloors = Number(totalFlMatch[1]);
     }
 
-    const refugeMatch = txt.match(/Refuge\s+Floor[s]?\s*[:\-]?\s*(\d{1,3})/i);
+    const refugeMatch = txt.match(/Refuge\s+Floor[s]?\s*[:-]?\s*(\d{1,3})/i);
     if (refugeMatch) {
       const r = Number(refugeMatch[1]);
       if (!refugeFloors.includes(r)) refugeFloors.push(r);
@@ -309,8 +309,8 @@ function parseStructuredHintsFromPages(pages: ParsedPageContent[]): VisionExtrac
 
     const unitsPerFlMatch = txt.match(/(\d{1,2})\s*(?:Apartments|Units|Flats)\s*(?:per\s*floor)?/i);
     const bhkMatch = txt.match(/\b([1-6]\s*BHK)\b/i);
-    const saleableMatch = txt.match(/Saleable\s*(?:Area)?\s*[:\-]?\s*(\d{3,5})/i);
-    const carpetMatch = txt.match(/Carpet\s*(?:Area)?\s*[:\-]?\s*(\d{3,5})/i);
+    const saleableMatch = txt.match(/Saleable\s*(?:Area)?\s*[:-]?\s*(\d{3,5})/i);
+    const carpetMatch = txt.match(/Carpet\s*(?:Area)?\s*[:-]?\s*(\d{3,5})/i);
     const facingMatch = txt.match(
       /\b(NORTH_EAST|NORTH_WEST|SOUTH_EAST|SOUTH_WEST|EAST|WEST|NORTH|SOUTH)\b/i
     );

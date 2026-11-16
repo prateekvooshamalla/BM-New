@@ -149,6 +149,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const isUnrestrictedAdmin =
           isSuperAdmin ||
           activeMember?.role === 'PLATFORM_SUPER_ADMIN' ||
+          activeMember?.role === 'BUILDER_ADMIN' ||
           activeMember?.role === 'PROJECT_DIRECTOR' ||
           !activeMember?.assignedProjectIds ||
           activeMember.assignedProjectIds.length === 0;

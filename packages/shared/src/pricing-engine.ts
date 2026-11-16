@@ -127,7 +127,7 @@ export function resolveEffectivePriceBook(params: {
     return { effectivePriceBook: basePriceBook, appliedOverrideChain: [] };
   }
 
-  let effective: PriceBook = {
+  const effective: PriceBook = {
     ...basePriceBook,
     floorRise: { ...basePriceBook.floorRise },
     facingPremiumPerSqft: { ...basePriceBook.facingPremiumPerSqft },
