@@ -40,6 +40,7 @@ import {
 } from '@/components/ui/select';
 import { CreateOrganizationDialog } from '@/features/organizations/components/CreateOrganizationDialog';
 import { AiAssistantDock } from '@/features/ai-assistant/components/AiAssistantDock';
+import { WorkspaceViewSwitcher } from '@/components/layout/WorkspaceViewSwitcher';
 
 const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
@@ -379,6 +380,7 @@ export function EnterpriseLayout() {
           </div>
 
           <div className="flex items-center gap-2">
+            <WorkspaceViewSwitcher />
             <Button
               type="button"
               variant={aiDrawerOpen ? 'default' : 'outline'}
@@ -387,14 +389,8 @@ export function EnterpriseLayout() {
               onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
             >
               <Sparkles className="h-3.5 w-3.5" />
-              <span>AI Assistant</span>
+              <span className="hidden sm:inline">AI Assistant</span>
             </Button>
-            <Link
-              to="/"
-              className="hidden text-xs font-medium text-muted-foreground hover:text-foreground sm:inline px-2"
-            >
-              Public Portal
-            </Link>
             <Button
               variant="ghost"
               size="icon"

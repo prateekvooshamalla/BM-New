@@ -5,18 +5,21 @@ import { BRAND_CONFIG } from '@bharat-makaan/config';
 import { auth } from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
 import { Button } from '@/components/ui/button';
+import { WorkspaceViewSwitcher } from '@/components/layout/WorkspaceViewSwitcher';
 
 export function PublicPortalLayout() {
   const navigate = useNavigate();
   const {
     uid,
     isSuperAdmin,
+    organizations,
     memberships,
     partnerMemberships,
     compareUnitIds,
   } = useTenantStore();
 
-  const hasBuilderAccess = memberships.some((m) => m.status === 'ACTIVE');
+  const hasBuilderAccess =
+    organizations.length > 0 || memberships.some((m) => m.status === 'ACTIVE');
   const hasPartnerAccess = partnerMemberships.some((p) => p.status === 'ACTIVE');
 
   const handleSignOut = async () => {
@@ -83,19 +86,8 @@ export function PublicPortalLayout() {
           <div className="flex items-center gap-2">
             {uid ? (
               <>
-                {isSuperAdmin ? (
-                  <Button size="sm" asChild>
-                    <Link to="/admin/dashboard">Super Admin</Link>
-                  </Button>
-                ) : hasBuilderAccess ? (
-                  <Button size="sm" asChild>
-                    <Link to="/builder/dashboard">Builder Workspace</Link>
-                  </Button>
-                ) : hasPartnerAccess ? (
-                  <Button size="sm" asChild>
-                    <Link to="/partner/dashboard">Partner Portal</Link>
-                  </Button>
-                ) : (
+                <WorkspaceViewSwitcher />
+                {!hasBuilderAccess && !hasPartnerAccess && !isSuperAdmin && (
                   <Button variant="outline" size="sm" asChild>
                     <Link to="/saved">My Shortlist</Link>
                   </Button>
@@ -149,8 +141,21 @@ export function PublicPortalLayout() {
             <ul className="space-y-1.5">
               <li><Link to="/for-professionals" className="hover:underline">For Builders &amp; Agencies</Link></li>
               <li><Link to="/pricing" className="hover:underline">Builder Packages (₹5,999 / ₹4,999)</Link></li>
-              <li><Link to="/register?persona=builder" className="hover:underline">Builder Onboarding</Link></li>
-              <li><Link to="/login?persona=partner" className="hover:underline">Channel Partner Sign In</Link></li>
+              <li>
+                <Link
+                  to={
+                    hasBuilderAccess
+                      ? '/builder/dashboard'
+                      : uid
+                        ? '/builder/onboarding'
+                        : '/register?persona=builder'
+                  }
+                  className="hover:underline"
+                >
+                  {hasBuilderAccess ? 'Open Builder Workspace' : 'Builder Onboarding'}
+                </Link>
+              </li>
+              <li><Link to={hasPartnerAccess ? '/partner/dashboard' : '/login?persona=partner'} className="hover:underline">Channel Partner Portal</Link></li>
             </ul>
           </div>
           <div className="space-y-2">

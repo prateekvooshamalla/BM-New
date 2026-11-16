@@ -979,6 +979,15 @@ export function PublicContactBuilderPage() {
 
 // 10. FOR PROFESSIONALS
 export function PublicForProfessionalsPage() {
+  const { uid, organizations, memberships } = useTenantStore();
+  const hasBuilderAccess =
+    organizations.length > 0 || memberships.some((m) => m.status === 'ACTIVE');
+  const builderTarget = hasBuilderAccess
+    ? '/builder/dashboard'
+    : uid
+      ? '/builder/onboarding'
+      : '/register?persona=builder';
+
   return (
     <div className="bm-container py-14 space-y-10">
       <SeoHead
@@ -990,7 +999,11 @@ export function PublicForProfessionalsPage() {
         <h1 className="text-3xl font-bold">{BRAND_CONFIG.positioning}</h1>
         <p className="text-muted-foreground">{BRAND_CONFIG.promise}</p>
         <div className="flex gap-3 pt-2">
-          <Button asChild><Link to="/auth/register">Onboard Builder Organization</Link></Button>
+          <Button asChild>
+            <Link to={builderTarget}>
+              {hasBuilderAccess ? 'Open Builder Workspace' : 'Onboard Builder Organization'}
+            </Link>
+          </Button>
           <Button variant="outline" asChild><Link to="/pricing">View SaaS Plans</Link></Button>
         </div>
       </div>
@@ -1027,6 +1040,14 @@ export function PublicForProfessionalsPage() {
 
 // 11. SAAS PRICING PAGE
 export function PublicPricingPage() {
+  const { uid, organizations, memberships } = useTenantStore();
+  const hasBuilderAccess =
+    organizations.length > 0 || memberships.some((m) => m.status === 'ACTIVE');
+  const packageActionHref = hasBuilderAccess
+    ? '/builder/billing'
+    : uid
+      ? '/builder/onboarding'
+      : '/register?persona=builder';
   const [multiProjectSlots, setMultiProjectSlots] = React.useState(2);
   const multiCalc = calculateBuilderSubscriptionMonthlyInr('MULTI_PROJECT', multiProjectSlots, 18);
 
@@ -1071,7 +1092,9 @@ export function PublicPricingPage() {
             </div>
             <div className="pt-4">
               <Button className="w-full" size="sm" asChild>
-                <Link to="/register?persona=builder">Start Single Project Package</Link>
+                <Link to={packageActionHref}>
+                  {hasBuilderAccess ? 'Manage in Builder Billing' : 'Start Single Project Package'}
+                </Link>
               </Button>
             </div>
           </CardContent>
@@ -1122,7 +1145,9 @@ export function PublicPricingPage() {
             </div>
             <div className="pt-2">
               <Button className="w-full" size="sm" asChild>
-                <Link to="/register?persona=builder">Start Multi-Project Package</Link>
+                <Link to={packageActionHref}>
+                  {hasBuilderAccess ? 'Manage in Builder Billing' : 'Start Multi-Project Package'}
+                </Link>
               </Button>
             </div>
           </CardContent>

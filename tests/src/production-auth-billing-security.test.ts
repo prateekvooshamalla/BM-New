@@ -1171,5 +1171,24 @@ describe('Production Authentication, Four Persona Access Control, Razorpay Billi
       reason: 'Customer hold verification',
     });
     expect(held.status).toBe('ON_HOLD');
+
+    // Verify returning builder immediately resolves their existing company (never sent back to onboarding)
+    const returningSync = await syncMySessionMembershipsService(db, BUILDER_A_ADMIN, {
+      email: BUILDER_A_ADMIN.email,
+      emailVerified: true,
+      mfaEnrolledCount: 1,
+    });
+    expect(returningSync.organizations).toHaveLength(1);
+    expect(returningSync.organizations[0]?.id).toBe(organization.id);
+    expect(
+      resolveDefaultPostLoginRoute({
+        isSuperAdmin: false,
+        hasActiveBuilderMembership: returningSync.orgMemberships.some(
+          (m) => m.status === 'ACTIVE'
+        ),
+        hasActivePartnerMembership: false,
+        requestedPersona: 'builder',
+      })
+    ).toBe('/builder/dashboard');
   });
 });

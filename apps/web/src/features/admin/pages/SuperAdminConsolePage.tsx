@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { signOut } from 'firebase/auth';
 import {
   Activity,
@@ -36,6 +36,7 @@ import {
 import { auth, callBackendFunction } from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { WorkspaceViewSwitcher } from '@/components/layout/WorkspaceViewSwitcher';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { DataTable } from '@/components/shared/DataTable';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -270,12 +271,10 @@ export function SuperAdminConsolePage({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <WorkspaceViewSwitcher />
             <Button variant="outline" size="sm" onClick={() => void loadOverview()}>
               <RefreshCw className="h-3.5 w-3.5" />
               Refresh
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <Link to="/builder/dashboard">Builder Console</Link>
             </Button>
             <Button variant="ghost" size="sm" onClick={handleSignOut}>
               <LogOut className="h-3.5 w-3.5" />

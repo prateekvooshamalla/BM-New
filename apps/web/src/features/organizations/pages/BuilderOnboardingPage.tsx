@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import type { z } from 'zod';
@@ -18,17 +18,23 @@ type CreateOrgFormValues = z.infer<typeof createOrganizationSchema>;
 
 export function BuilderOnboardingPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const forceCreateNew = searchParams.get('new') === '1';
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const [targetPackage, setTargetPackage] = React.useState<'SINGLE_PROJECT' | 'MULTI_PROJECT'>(
     'SINGLE_PROJECT'
   );
   const {
     email,
+    isAuthLoading,
     organizations,
     memberships,
     setOrganizationsAndMemberships,
     selectOrganization,
   } = useTenantStore();
+
+  const hasExistingBuilderOrg =
+    organizations.length > 0 || memberships.some((m) => m.status === 'ACTIVE');
 
   const {
     register,
@@ -50,6 +56,19 @@ export function BuilderOnboardingPage() {
     },
   });
 
+  if (isAuthLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-xs text-muted-foreground">
+        Loading your builder workspace...
+      </div>
+    );
+  }
+
+  // If the user already has a builder company and did not explicitly ask for `?new=1`, go straight to their existing company!
+  if (hasExistingBuilderOrg && !forceCreateNew) {
+    return <Navigate to="/builder/dashboard" replace />;
+  }
+
   const onSubmit = async (values: CreateOrgFormValues) => {
     setErrorMessage(null);
     try {
@@ -64,9 +83,9 @@ export function BuilderOnboardingPage() {
       selectOrganization(res.organization.id);
 
       if (targetPackage === 'MULTI_PROJECT') {
-        navigate('/builder/billing');
+        navigate('/builder/billing', { replace: true });
       } else {
-        navigate('/builder/dashboard');
+        navigate('/builder/dashboard', { replace: true });
       }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to create organization.');

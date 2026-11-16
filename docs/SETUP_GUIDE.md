@@ -89,6 +89,16 @@ firebase emulators:exec --only firestore "pnpm test:emulator"
 
 ## 4. Production Deployment
 
+Functions are built from `functions/src` and staged in `.firebase/functions` by the predeploy hooks. The build bundles the local `@bharat-makaan/*` packages, and the staging script writes a runtime-only package manifest without `workspace:*` references. Do not edit or commit the generated staging directory. Backend environment variables belong in `functions/.env` or `functions/.env.<project-id>`; the mixed root `.env` is not uploaded.
+
+If browser requests to callable functions report CORS errors, check the endpoint HTTP status and deployment first. A missing endpoint returns 404 without callable CORS headers. Deploy the onboarding endpoints with an account that has access to the configured Firebase project:
+
+```bash
+npx -y firebase-tools@latest deploy --only functions:syncMySessionMemberships,functions:createOrganization --project bharathmakaan
+```
+
+A 403 from the CLI requires correcting the signed-in account or its project permissions before deployment can proceed.
+
 1. **Generate SEO Sitemap & Build All Packages**:
    ```bash
    pnpm generate:sitemap

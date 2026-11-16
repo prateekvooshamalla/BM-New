@@ -17,7 +17,13 @@ import type {
   Project,
   TenantEntitlements,
 } from '@bharat-makaan/shared';
-import { auth, callBackendFunction, db, isEmulatorMode, isFirebaseConfigured } from '@/lib/firebase';
+import {
+  auth,
+  callBackendFunction,
+  db,
+  isEmulatorMode,
+  isFirebaseConfigured,
+} from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -44,15 +50,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    let cleanupUserListeners: (() => void) | null = null;
+
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
+      if (cleanupUserListeners) {
+        cleanupUserListeners();
+        cleanupUserListeners = null;
+      }
+
       if (!user) {
         resetSession();
         return;
       }
 
+      // Keep `isAuthLoading: true` until initial memberships & organizations resolve so guards never flash onboarding!
+      setAuthContext({
+        uid: user.uid,
+        email: user.email,
+        emailVerified: user.emailVerified,
+        displayName: user.displayName,
+        isSuperAdmin: false,
+        mfaEnrolledCount: 0,
+        isAuthLoading: true,
+      });
+
+      let cancelled = false;
+      let settledInitialLoad = false;
+
+      const markInitialLoadComplete = (extra?: {
+        isSuperAdmin?: boolean;
+        mfaEnrolledCount?: number;
+        emailVerified?: boolean;
+        pendingUnverifiedInvitationsCount?: number;
+      }) => {
+        if (cancelled) return;
+        settledInitialLoad = true;
+        const cur = useTenantStore.getState();
+        setAuthContext({
+          uid: user.uid,
+          email: user.email,
+          emailVerified: extra?.emailVerified ?? cur.emailVerified ?? user.emailVerified,
+          displayName: user.displayName,
+          isSuperAdmin: extra?.isSuperAdmin ?? cur.isSuperAdmin,
+          mfaEnrolledCount: extra?.mfaEnrolledCount ?? cur.mfaEnrolledCount,
+          pendingUnverifiedInvitationsCount:
+            extra?.pendingUnverifiedInvitationsCount ?? cur.pendingUnverifiedInvitationsCount,
+          isAuthLoading: false,
+        });
+      };
+
       try {
         const tokenResult = await user.getIdTokenResult();
-        const isSuperAdmin = tokenResult.claims.platformRole === 'PLATFORM_SUPER_ADMIN';
+        if (cancelled) return;
+        const claimSuperAdmin = tokenResult.claims.platformRole === 'PLATFORM_SUPER_ADMIN';
         const mfaCount = multiFactor(user).enrolledFactors.length;
 
         setAuthContext({
@@ -60,12 +110,98 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: user.email,
           emailVerified: user.emailVerified,
           displayName: user.displayName,
-          isSuperAdmin,
+          isSuperAdmin: claimSuperAdmin,
           mfaEnrolledCount: mfaCount,
-          isAuthLoading: false,
+          isAuthLoading: true,
         });
 
-        // Sync pending invitations & fetch memberships
+        // 1. Fast real-time Firestore subscription to user's organization & partner memberships
+        const memQ = query(
+          collection(db, 'organization_members'),
+          where('uid', '==', user.uid)
+        );
+        const unsubOrgMem = onSnapshot(
+          memQ,
+          async (snap) => {
+            if (cancelled) return;
+            const activeMemberships = snap.docs
+              .map((d) => d.data() as OrganizationMember)
+              .filter((m) => m.status === 'ACTIVE');
+
+            const orgSnaps = await Promise.all(
+              activeMemberships.map((m) =>
+                getDoc(doc(db, 'organizations', m.orgId)).catch(() => null)
+              )
+            );
+            if (cancelled) return;
+            const orgs = orgSnaps
+              .filter((s): s is NonNullable<typeof s> => Boolean(s && s.exists()))
+              .map((s) => s.data() as Organization);
+
+            // Merge with any server-hydrated orgs so transient client read issues never wipe active orgs
+            const existingOrgs = useTenantStore.getState().organizations;
+            const mergedOrgsMap = new Map<string, Organization>();
+            for (const eo of existingOrgs) {
+              if (activeMemberships.some((m) => m.orgId === eo.id)) {
+                mergedOrgsMap.set(eo.id, eo);
+              }
+            }
+            for (const o of orgs) {
+              mergedOrgsMap.set(o.id, o);
+            }
+
+            setOrganizationsAndMemberships(
+              Array.from(mergedOrgsMap.values()),
+              activeMemberships
+            );
+
+            // Only mark loading complete immediately if we already found active memberships;
+            // if empty, wait briefly for `syncMySessionMemberships` in case an INVITED membership is being claimed.
+            if (activeMemberships.length > 0 && !settledInitialLoad) {
+              markInitialLoadComplete({
+                isSuperAdmin: claimSuperAdmin,
+                mfaEnrolledCount: mfaCount,
+              });
+            }
+          },
+          () => {
+            // Handled by `syncMySessionMemberships` server fallback below
+          }
+        );
+
+        const partnerMemQ = query(
+          collection(db, 'partner_members'),
+          where('uid', '==', user.uid)
+        );
+        const unsubPartnerMem = onSnapshot(
+          partnerMemQ,
+          async (snap) => {
+            if (cancelled) return;
+            const pMembers = snap.docs
+              .map((d) => d.data() as PartnerMember)
+              .filter((p) => p.status === 'ACTIVE');
+            if (pMembers.length > 0) {
+              const poSnap = await getDoc(
+                doc(db, 'partner_organizations', pMembers[0]!.partnerOrgId)
+              ).catch(() => null);
+              if (!cancelled) {
+                setPartnerContext(
+                  pMembers,
+                  poSnap && poSnap.exists() ? (poSnap.data() as PartnerOrganization) : null
+                );
+              }
+            }
+          },
+          () => {}
+        );
+
+        cleanupUserListeners = () => {
+          cancelled = true;
+          unsubOrgMem();
+          unsubPartnerMem();
+        };
+
+        // 2. Authoritative backend session sync (activates INVITED memberships & returns server orgs directly)
         try {
           const synced = await callBackendFunction<
             Record<string, never>,
@@ -73,72 +209,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               emailVerified?: boolean;
               pendingUnverifiedInvitationsCount?: number;
               orgMemberships: OrganizationMember[];
+              organizations?: Organization[];
               partnerMemberships: PartnerMember[];
+              partnerOrganizations?: PartnerOrganization[];
             }
           >('syncMySessionMemberships', {});
 
-          setAuthContext({
-            uid: user.uid,
-            email: user.email,
-            emailVerified: synced.emailVerified ?? user.emailVerified,
-            displayName: user.displayName,
-            isSuperAdmin,
-            mfaEnrolledCount: mfaCount,
-            pendingUnverifiedInvitationsCount:
-              synced.pendingUnverifiedInvitationsCount ?? 0,
-            isAuthLoading: false,
-          });
+          if (cancelled) return;
 
-          const activeMemberships = synced.orgMemberships.filter((m) => m.status === 'ACTIVE');
-          const orgDocs = await Promise.all(
-            activeMemberships.map((m) => getDoc(doc(db, 'organizations', m.orgId)))
+          const activeMemberships = (synced.orgMemberships ?? []).filter(
+            (m) => m.status === 'ACTIVE'
           );
-          const orgs = orgDocs
-            .filter((snap) => snap.exists())
-            .map((snap) => snap.data() as Organization);
 
+          let orgs: Organization[] = synced.organizations ?? [];
+          if (orgs.length === 0 && activeMemberships.length > 0) {
+            const orgDocs = await Promise.all(
+              activeMemberships.map((m) =>
+                getDoc(doc(db, 'organizations', m.orgId)).catch(() => null)
+              )
+            );
+            orgs = orgDocs
+              .filter((s): s is NonNullable<typeof s> => Boolean(s && s.exists()))
+              .map((s) => s.data() as Organization);
+          }
+
+          if (cancelled) return;
           setOrganizationsAndMemberships(orgs, activeMemberships);
 
-          if (synced.partnerMemberships.length > 0) {
+          if ((synced.partnerMemberships ?? []).length > 0) {
             const firstPartner = synced.partnerMemberships[0]!;
-            const poSnap = await getDoc(doc(db, 'partner_organizations', firstPartner.partnerOrgId));
-            setPartnerContext(
-              synced.partnerMemberships,
-              poSnap.exists() ? (poSnap.data() as PartnerOrganization) : null
+            const serverPo = (synced.partnerOrganizations ?? []).find(
+              (po) => po.id === firstPartner.partnerOrgId
             );
+            if (serverPo) {
+              setPartnerContext(synced.partnerMemberships, serverPo);
+            } else {
+              const poSnap = await getDoc(
+                doc(db, 'partner_organizations', firstPartner.partnerOrgId)
+              ).catch(() => null);
+              if (!cancelled) {
+                setPartnerContext(
+                  synced.partnerMemberships,
+                  poSnap && poSnap.exists() ? (poSnap.data() as PartnerOrganization) : null
+                );
+              }
+            }
           }
+
+          markInitialLoadComplete({
+            isSuperAdmin: claimSuperAdmin,
+            mfaEnrolledCount: mfaCount,
+            emailVerified: synced.emailVerified ?? user.emailVerified,
+            pendingUnverifiedInvitationsCount:
+              synced.pendingUnverifiedInvitationsCount ?? 0,
+          });
         } catch {
-          // Fallback to direct Firestore query if callable is cold-starting
-          const memQ = query(
-            collection(db, 'organization_members'),
-            where('uid', '==', user.uid)
-          );
-          onSnapshot(memQ, async (snap) => {
-            const members = snap.docs
-              .map((d) => d.data() as OrganizationMember)
-              .filter((m) => m.status === 'ACTIVE');
-            const orgSnaps = await Promise.all(
-              members.map((m) => getDoc(doc(db, 'organizations', m.orgId)))
-            );
-            const orgs = orgSnaps
-              .filter((s) => s.exists())
-              .map((s) => s.data() as Organization);
-            setOrganizationsAndMemberships(orgs, members);
+          // Callable unavailable or cold-started; finalize loading using Firestore snapshot state
+          markInitialLoadComplete({
+            isSuperAdmin: claimSuperAdmin,
+            mfaEnrolledCount: mfaCount,
           });
         }
       } catch {
-        setAuthContext({
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
+        markInitialLoadComplete({
           isSuperAdmin: false,
           mfaEnrolledCount: 0,
-          isAuthLoading: false,
         });
       }
     });
 
-    return () => unsubAuth();
+    return () => {
+      if (cleanupUserListeners) cleanupUserListeners();
+      unsubAuth();
+    };
   }, [
     resetSession,
     setAuthContext,

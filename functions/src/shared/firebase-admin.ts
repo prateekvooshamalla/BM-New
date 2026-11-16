@@ -8,5 +8,8 @@ if (getApps().length === 0) {
 }
 
 export const adminDb = getFirestore();
+// Optional domain fields should be omitted from documents when left blank.
+// Configure before the first query/transaction so all backend writes agree.
+adminDb.settings({ ignoreUndefinedProperties: true });
 export const adminAuth = getAuth();
 export const adminStorage = getStorage();

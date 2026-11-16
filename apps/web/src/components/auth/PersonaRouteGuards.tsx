@@ -49,6 +49,7 @@ export function BuilderWorkspaceGuard({
     isAuthLoading,
     isSuperAdmin,
     mfaEnrolledCount,
+    organizations,
     memberships,
     emailVerified,
     pendingUnverifiedInvitationsCount,
@@ -66,7 +67,8 @@ export function BuilderWorkspaceGuard({
     uid,
     isSuperAdmin,
     mfaEnrolledCount,
-    hasActiveBuilderMembership: memberships.some((m) => m.status === 'ACTIVE'),
+    hasActiveBuilderMembership:
+      organizations.length > 0 || memberships.some((m) => m.status === 'ACTIVE'),
     hasActivePartnerMembership: false,
     targetPersona: 'BUILDER',
     isBuilderOnboardingRoute: allowOnboardingWithoutOrg,

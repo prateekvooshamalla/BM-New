@@ -11,6 +11,29 @@ import type {
 export type ProjectScopeMode = 'ALL_PROJECTS' | 'PORTFOLIO_OVERVIEW' | 'SINGLE_PROJECT';
 
 const STORAGE_PREFIX = 'bm_project_scope_';
+const ACTIVE_ORG_STORAGE_PREFIX = 'bm_active_org_';
+
+function readPersistedActiveOrgId(uid: string | null): string | null {
+  if (!uid || typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(`${ACTIVE_ORG_STORAGE_PREFIX}${uid}`);
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedActiveOrgId(uid: string | null, orgId: string | null): void {
+  if (!uid || typeof window === 'undefined') return;
+  try {
+    if (orgId) {
+      window.localStorage.setItem(`${ACTIVE_ORG_STORAGE_PREFIX}${uid}`, orgId);
+    } else {
+      window.localStorage.removeItem(`${ACTIVE_ORG_STORAGE_PREFIX}${uid}`);
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+}
 
 function readPersistedProjectScope(orgId: string): {
   mode: ProjectScopeMode;
@@ -163,10 +186,16 @@ export const useTenantStore = create<TenantState>((set, get) => ({
 
   setOrganizationsAndMemberships: (orgs, members) =>
     set((state) => {
+      const persistedOrgId = readPersistedActiveOrgId(state.uid);
       const preferredOrgId =
         state.activeOrgId && orgs.some((o) => o.id === state.activeOrgId)
           ? state.activeOrgId
-          : (orgs[0]?.id ?? null);
+          : persistedOrgId && orgs.some((o) => o.id === persistedOrgId)
+            ? persistedOrgId
+            : (orgs[0]?.id ?? null);
+      if (preferredOrgId) {
+        writePersistedActiveOrgId(state.uid, preferredOrgId);
+      }
       const activeOrganization = orgs.find((o) => o.id === preferredOrgId) ?? null;
       const activeMember = members.find((m) => m.orgId === preferredOrgId) ?? null;
       return {
@@ -180,6 +209,7 @@ export const useTenantStore = create<TenantState>((set, get) => ({
 
   selectOrganization: (orgId) =>
     set((state) => {
+      writePersistedActiveOrgId(state.uid, orgId);
       const activeOrganization = state.organizations.find((o) => o.id === orgId) ?? null;
       const activeMember = state.memberships.find((m) => m.orgId === orgId) ?? null;
       return {

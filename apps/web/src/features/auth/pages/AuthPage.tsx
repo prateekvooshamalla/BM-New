@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   createUserWithEmailAndPassword,
   getMultiFactorResolver,
@@ -15,7 +15,9 @@ import {
 } from 'firebase/auth';
 import { ShieldCheck } from 'lucide-react';
 import { BRAND_CONFIG } from '@bharat-makaan/config';
+import type { Organization, OrganizationMember } from '@bharat-makaan/shared';
 import { auth, callBackendFunction } from '@/lib/firebase';
+import { useTenantStore } from '@/state/useTenantStore';
 import { resolveDefaultPostLoginRoute } from '@/components/auth/PersonaRouteGuards';
 import { Button } from '@/components/ui/button';
 import {
@@ -37,6 +39,15 @@ export function AuthPage({
   const [searchParams] = useSearchParams();
   const requestedPersona = searchParams.get('persona');
   const redirectTarget = searchParams.get('redirect');
+  const {
+    uid: storeUid,
+    isAuthLoading,
+    isSuperAdmin: storeIsSuperAdmin,
+    organizations: storeOrgs,
+    memberships: storeMemberships,
+    partnerMemberships: storePartnerMemberships,
+    setOrganizationsAndMemberships,
+  } = useTenantStore();
   const [mode, setMode] = React.useState<'login' | 'register' | 'reset'>(
     defaultMode
   );
@@ -83,12 +94,12 @@ export function AuthPage({
 
   const routeAfterSignIn = async () => {
     if (redirectTarget && redirectTarget.startsWith('/')) {
-      navigate(redirectTarget);
+      navigate(redirectTarget, { replace: true });
       return;
     }
     const currentUser = auth.currentUser;
     if (!currentUser) {
-      navigate('/');
+      navigate('/', { replace: true });
       return;
     }
     try {
@@ -96,9 +107,19 @@ export function AuthPage({
       const isSuperAdmin = tokenRes.claims.platformRole === 'PLATFORM_SUPER_ADMIN';
       const synced = await callBackendFunction<
         Record<string, never>,
-        { orgMemberships?: Array<{ status: string }>; partnerMemberships?: Array<{ status: string }> }
+        {
+          orgMemberships?: OrganizationMember[];
+          organizations?: Organization[];
+          partnerMemberships?: Array<{ status: string }>;
+        }
       >('syncMySessionMemberships', {});
-      const hasBuilder = (synced.orgMemberships ?? []).some((m) => m.status === 'ACTIVE');
+      const activeMemberships = (synced.orgMemberships ?? []).filter(
+        (m) => m.status === 'ACTIVE'
+      );
+      if (activeMemberships.length > 0 || (synced.organizations ?? []).length > 0) {
+        setOrganizationsAndMemberships(synced.organizations ?? [], activeMemberships);
+      }
+      const hasBuilder = activeMemberships.length > 0;
       const hasPartner = (synced.partnerMemberships ?? []).some((p) => p.status === 'ACTIVE');
       navigate(
         resolveDefaultPostLoginRoute({
@@ -106,10 +127,21 @@ export function AuthPage({
           hasActiveBuilderMembership: hasBuilder,
           hasActivePartnerMembership: hasPartner,
           requestedPersona,
-        })
+        }),
+        { replace: true }
       );
     } catch {
-      navigate(requestedPersona === 'builder' ? '/builder/onboarding' : '/saved');
+      const storeHasBuilder =
+        useTenantStore.getState().organizations.length > 0 ||
+        useTenantStore.getState().memberships.some((m) => m.status === 'ACTIVE');
+      navigate(
+        storeHasBuilder
+          ? '/builder/dashboard'
+          : requestedPersona === 'builder'
+            ? '/builder/onboarding'
+            : '/saved',
+        { replace: true }
+      );
     }
   };
 
@@ -194,6 +226,23 @@ export function AuthPage({
       setLoading(null);
     }
   };
+
+  // If already signed in (and not mid-sign-in or MFA challenge), immediately route to their existing workspace!
+  if (storeUid && !isAuthLoading && !loading && !mfaResolver && mode !== 'reset') {
+    if (redirectTarget && redirectTarget.startsWith('/')) {
+      return <Navigate to={redirectTarget} replace />;
+    }
+    const hasBuilder =
+      storeOrgs.length > 0 || storeMemberships.some((m) => m.status === 'ACTIVE');
+    const hasPartner = storePartnerMemberships.some((p) => p.status === 'ACTIVE');
+    const dest = resolveDefaultPostLoginRoute({
+      isSuperAdmin: storeIsSuperAdmin,
+      hasActiveBuilderMembership: hasBuilder,
+      hasActivePartnerMembership: hasPartner,
+      requestedPersona,
+    });
+    return <Navigate to={dest} replace />;
+  }
 
   return (
     <div className="flex min-h-screen flex-col justify-center bg-background px-4 py-12">

@@ -5,8 +5,10 @@ import {
   normalizeEmail,
   type CustomerSavedProperty,
   type Lead,
+  type Organization,
   type OrganizationMember,
   type PartnerMember,
+  type PartnerOrganization,
   type Project,
   type SiteVisit,
   type Unit,
@@ -90,6 +92,27 @@ export async function syncMySessionMembershipsService(
   const orgMemberships = orgMembersSnap.docs.map((d) => d.data() as OrganizationMember);
   const partnerMemberships = partnerMembersSnap.docs.map((d) => d.data() as PartnerMember);
 
+  const activeOrgIds = Array.from(
+    new Set(orgMemberships.filter((m) => m.status === 'ACTIVE').map((m) => m.orgId))
+  );
+  const activePartnerOrgIds = Array.from(
+    new Set(partnerMemberships.filter((p) => p.status === 'ACTIVE').map((p) => p.partnerOrgId))
+  );
+
+  const [orgDocs, partnerOrgDocs] = await Promise.all([
+    Promise.all(activeOrgIds.map((id) => db.collection('organizations').doc(id).get())),
+    Promise.all(
+      activePartnerOrgIds.map((id) => db.collection('partner_organizations').doc(id).get())
+    ),
+  ]);
+
+  const organizations = orgDocs
+    .filter((s) => s.exists)
+    .map((s) => s.data() as Organization);
+  const partnerOrganizations = partnerOrgDocs
+    .filter((s) => s.exists)
+    .map((s) => s.data() as PartnerOrganization);
+
   return {
     uid: actor.uid,
     email: userInfo.email,
@@ -98,7 +121,9 @@ export async function syncMySessionMembershipsService(
     mfaEnrolledCount: userInfo.mfaEnrolledCount,
     pendingUnverifiedInvitationsCount,
     orgMemberships,
+    organizations,
     partnerMemberships,
+    partnerOrganizations,
   };
 }
 

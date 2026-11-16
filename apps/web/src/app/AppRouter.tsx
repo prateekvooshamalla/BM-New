@@ -117,7 +117,7 @@ import {
 
 export function AppRouter() {
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <React.Suspense
         fallback={
           <div className="flex min-h-[240px] items-center justify-center text-xs text-muted-foreground">

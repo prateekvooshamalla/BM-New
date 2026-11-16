@@ -42,6 +42,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { AiAssistantDock } from '@/features/ai-assistant/components/AiAssistantDock';
+import { WorkspaceViewSwitcher } from '@/components/layout/WorkspaceViewSwitcher';
 
 const PARTNER_NAV = [
   { key: 'dashboard', path: '/partner/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -67,7 +68,6 @@ export function PartnerPortalPage({
   const {
     activePartnerOrg,
     partnerMemberships,
-    memberships,
     email,
     aiDrawerOpen,
     setAiDrawerOpen,
@@ -92,8 +92,6 @@ export function PartnerPortalPage({
   const [custName, setCustName] = React.useState('');
   const [custPhone, setCustPhone] = React.useState('');
   const [banner, setBanner] = React.useState<string | null>(null);
-
-  const hasBuilderWorkspaceAccess = memberships.some((m) => m.status === 'ACTIVE');
 
   React.useEffect(() => {
     if (!activePartnerOrg) return;
@@ -270,6 +268,7 @@ export function PartnerPortalPage({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <WorkspaceViewSwitcher />
             {builderOrgId && (
               <Button
                 type="button"
@@ -279,11 +278,6 @@ export function PartnerPortalPage({
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 AI Assistant
-              </Button>
-            )}
-            {hasBuilderWorkspaceAccess && (
-              <Button variant="outline" size="sm" asChild>
-                <Link to="/builder/dashboard">Switch to Builder Workspace</Link>
               </Button>
             )}
             <Button variant="ghost" size="sm" onClick={handleSignOut}>

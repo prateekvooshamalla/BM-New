@@ -8,7 +8,7 @@
   },
   "functions": [
     {
-      "source": "functions",
+      "source": ".firebase/functions",
       "codebase": "default",
       "ignore": [
         "node_modules",
@@ -21,7 +21,9 @@
         "pnpm --filter @bharat-makaan/config build",
         "pnpm --filter @bharat-makaan/shared build",
         "pnpm --filter @bharat-makaan/validation build",
-        "pnpm --filter @bharat-makaan/functions build"
+        "pnpm --filter @bharat-makaan/functions build",
+        "node scripts/prepare-functions-deploy.mjs",
+        "npm --prefix .firebase/functions install --omit dev --ignore-scripts"
       ]
     }
   ],
