@@ -18,3 +18,5 @@ export * from './whatsapp';
 export * from './notifications';
 export * from './bookings';
 export * from './collections';
+export * from './integrations';
+export * from './ai';

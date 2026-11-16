@@ -8,8 +8,8 @@
 | **Phase 3** | Dynamic Pricing Engine (Versioned Price Books, Custom Labels, History) | Completed | Typecheck, 9/9 tests (custom labels, approval immutability, cloning & unit revisions), Web + Functions builds passed | `b355032` |
 | **Phase 4** | Quotations & Documents (Cost Sheets, C-704 Test, PDF, Floor Plans) | Completed | Typecheck, 11/11 tests (C-704 ₹3,92,73,985 regression, CLP 100% schedule, PDF generation, floor plan mapping), Web + Functions builds passed | `77ff2c6` |
 | **Phase 5** | Sales Operations (CRM, Channel Partners, WhatsApp Inbox, Visits) | Completed | Typecheck, 14/14 tests (CRM dedup, partner lead protection & conflict resolution, WhatsApp HMAC/24h/AI gate, site visits), Web + Functions builds passed | `e5efd83` |
-| **Phase 6** | Booking & Finance (Holds, Bookings, Collections, Razorpay, Ledger) | Completed | Typecheck, 15/15 tests (double-booking lock, Razorpay HMAC verification, settlement reconciliation, cancellation release), Web + Functions builds passed | Ready to commit |
-| **Phase 7** | Lead Capture & AI (Drag-Drop Form Builder, Ad Webhooks, OpenAI 14 Tasks) | In Progress | — | — |
-| **Phase 8** | Public Property Portal (13+ Routes, Comparison, Enquiries, SEO) | Pending | — | — |
+| **Phase 6** | Booking & Finance (Holds, Bookings, Collections, Razorpay, Ledger) | Completed | Typecheck, 15/15 tests (double-booking lock, Razorpay HMAC verification, settlement reconciliation, cancellation release), Web + Functions builds passed | `06dd637` |
+| **Phase 7** | Lead Capture & AI (Drag-Drop Form Builder, Ad Webhooks, OpenAI 14 Tasks) | Completed | Typecheck, 17/17 tests (drag-drop form builder, honeypot/rate-limit, Meta/Google webhooks, OpenAI 14 tasks & credit guard), Web + Functions builds passed | Ready to commit |
+| **Phase 8** | Public Property Portal (13+ Routes, Comparison, Enquiries, SEO) | In Progress | — | — |
 | **Phase 9** | Mobile App (Expo + React Native + NativeWind, 5 Bottom Tabs, Sync) | Pending | — | — |
 | **Phase 10** | Super Admin, SaaS Billing, Reports & Audit, Full QA & Deployment Docs | Pending | — | — |
