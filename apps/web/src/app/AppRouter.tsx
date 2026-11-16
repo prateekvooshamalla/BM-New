@@ -2,6 +2,12 @@ import * as React from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { EnterpriseLayout } from '@/components/layout/EnterpriseLayout';
 import { PublicPortalLayout } from '@/components/layout/PublicPortalLayout';
+import {
+  BuilderWorkspaceGuard,
+  CustomerAuthGuard,
+  PartnerWorkspaceGuard,
+  SuperAdminGuard,
+} from '@/components/auth/PersonaRouteGuards';
 import { AuthPage } from '@/features/auth/pages/AuthPage';
 import { DashboardPage } from '@/features/dashboard/pages/DashboardPage';
 
@@ -68,6 +74,16 @@ const ReportsAndAuditPage = React.lazy(() =>
 const SettingsPage = React.lazy(() =>
   import('@/features/settings/pages/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 );
+const BuilderBillingPage = React.lazy(() =>
+  import('@/features/billing/pages/BuilderBillingPage').then((m) => ({
+    default: m.BuilderBillingPage,
+  }))
+);
+const BuilderOnboardingPage = React.lazy(() =>
+  import('@/features/organizations/pages/BuilderOnboardingPage').then((m) => ({
+    default: m.BuilderOnboardingPage,
+  }))
+);
 const SuperAdminConsolePage = React.lazy(() =>
   import('@/features/admin/pages/SuperAdminConsolePage').then((m) => ({
     default: m.SuperAdminConsolePage,
@@ -76,6 +92,11 @@ const SuperAdminConsolePage = React.lazy(() =>
 const AiInventoryStudioPage = React.lazy(() =>
   import('@/features/ai-assistant/pages/AiInventoryStudioPage').then((m) => ({
     default: m.AiInventoryStudioPage,
+  }))
+);
+const CustomerPortalPage = React.lazy(() =>
+  import('@/features/public-portal/pages/CustomerPortalPage').then((m) => ({
+    default: m.CustomerPortalPage,
   }))
 );
 
@@ -105,13 +126,15 @@ export function AppRouter() {
         }
       >
         <Routes>
-          {/* Public Property Portal Routes */}
+          {/* A. CUSTOMER & PUBLIC PROPERTY PORTAL EXPERIENCE */}
           <Route element={<PublicPortalLayout />}>
             <Route path="/" element={<PublicHomePage />} />
             <Route path="/buy" element={<PublicListingsCatalogPage mode="BUY" />} />
             <Route path="/rent" element={<PublicListingsCatalogPage mode="RENT" />} />
             <Route path="/projects" element={<PublicProjectsDirectoryPage />} />
+            <Route path="/project/:slug" element={<PublicProjectDetailsPage />} />
             <Route path="/projects/:projectId" element={<PublicProjectDetailsPage />} />
+            <Route path="/property/:slug" element={<PublicPropertyDetailsPage />} />
             <Route path="/properties/:unitId" element={<PublicPropertyDetailsPage />} />
             <Route path="/compare" element={<PublicPropertyComparePage />} />
             <Route path="/book-visit" element={<PublicBookVisitPage />} />
@@ -120,19 +143,77 @@ export function AppRouter() {
             <Route path="/pricing" element={<PublicPricingPage />} />
             <Route path="/about" element={<PublicAboutPage />} />
             <Route path="/contact" element={<PublicContactPage />} />
+
+            {/* Authenticated Personal Customer Routes */}
+            <Route element={<CustomerAuthGuard />}>
+              <Route path="/saved" element={<CustomerPortalPage section="saved" />} />
+              <Route path="/my-enquiries" element={<CustomerPortalPage section="enquiries" />} />
+              <Route path="/my-visits" element={<CustomerPortalPage section="visits" />} />
+            </Route>
           </Route>
 
-          {/* Auth, Hosted Forms, Expiring Document Links, Partner Portal & Super Admin */}
+          {/* Authentication, Hosted Forms & Expiring Document Share Links */}
+          <Route path="/login" element={<AuthPage defaultMode="login" />} />
+          <Route path="/register" element={<AuthPage defaultMode="register" />} />
           <Route path="/auth/login" element={<AuthPage defaultMode="login" />} />
           <Route path="/auth/register" element={<AuthPage defaultMode="register" />} />
           <Route path="/f/:formSlug" element={<PublicHostedFormPage />} />
           <Route path="/share/doc/:tokenId" element={<SharedDocumentViewPage />} />
-          <Route path="/partner/*" element={<PartnerPortalPage />} />
-          <Route path="/super-admin/*" element={<SuperAdminConsolePage />} />
 
-          {/* Enterprise Real Estate Management Workspace (Strictly 12 Primary Modules) */}
-          <Route path="/app" element={<EnterpriseLayout />}>
-            <Route index element={<Navigate to="/app/dashboard" replace />} />
+          {/* B. BUILDER WORKSPACE EXPERIENCE */}
+          <Route
+            path="/builder/onboarding"
+            element={
+              <BuilderWorkspaceGuard allowOnboardingWithoutOrg>
+                <BuilderOnboardingPage />
+              </BuilderWorkspaceGuard>
+            }
+          />
+
+          <Route
+            path="/builder"
+            element={
+              <BuilderWorkspaceGuard>
+                <EnterpriseLayout />
+              </BuilderWorkspaceGuard>
+            }
+          >
+            <Route index element={<Navigate to="/builder/dashboard" replace />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="projects" element={<ProjectsAndInventoryPage />} />
+            <Route path="projects/:id" element={<ProjectsAndInventoryPage />} />
+            <Route path="inventory" element={<ProjectsAndInventoryPage />} />
+            <Route path="parking" element={<ParkingPage />} />
+            <Route path="pricing" element={<PricingAndCostSheetsPage />} />
+            <Route path="cost-sheets" element={<PricingAndCostSheetsPage />} />
+            <Route path="quotations" element={<PricingAndCostSheetsPage />} />
+            <Route path="leads" element={<LeadsCrmPage />} />
+            <Route path="forms" element={<FormBuilderPage />} />
+            <Route path="inbox" element={<WhatsAppInboxPage />} />
+            <Route path="channel-partners" element={<ChannelPartnersPage />} />
+            <Route path="visits" element={<SiteVisitsPage />} />
+            <Route path="bookings" element={<BookingsAndCollectionsPage />} />
+            <Route path="collections" element={<BookingsAndCollectionsPage />} />
+            <Route path="documents" element={<DocumentsPage />} />
+            <Route path="ai-assistant" element={<AiInventoryStudioPage />} />
+            <Route path="ai-studio" element={<AiInventoryStudioPage />} />
+            <Route path="reports" element={<ReportsAndAuditPage />} />
+            <Route path="team" element={<SettingsPage defaultTab="team" />} />
+            <Route path="billing" element={<BuilderBillingPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/builder/dashboard" replace />} />
+          </Route>
+
+          {/* Backwards-compatible /app/* Builder aliases (guarded identically) */}
+          <Route
+            path="/app"
+            element={
+              <BuilderWorkspaceGuard>
+                <EnterpriseLayout />
+              </BuilderWorkspaceGuard>
+            }
+          >
+            <Route index element={<Navigate to="/builder/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
             <Route path="projects" element={<ProjectsAndInventoryPage />} />
             <Route path="inventory" element={<ProjectsAndInventoryPage />} />
@@ -147,11 +228,55 @@ export function AppRouter() {
             <Route path="bookings" element={<BookingsAndCollectionsPage />} />
             <Route path="documents" element={<DocumentsPage />} />
             <Route path="reports" element={<ReportsAndAuditPage />} />
+            <Route path="billing" element={<BuilderBillingPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="ai-studio" element={<AiInventoryStudioPage />} />
             <Route path="ai-assistant" element={<AiInventoryStudioPage />} />
-            <Route path="*" element={<DashboardPage />} />
+            <Route path="*" element={<Navigate to="/builder/dashboard" replace />} />
           </Route>
+
+          {/* C. CHANNEL PARTNER EXPERIENCE */}
+          <Route path="/partner" element={<PartnerWorkspaceGuard />}>
+            <Route index element={<Navigate to="/partner/dashboard" replace />} />
+            <Route path="dashboard" element={<PartnerPortalPage activeSection="dashboard" />} />
+            <Route path="builders" element={<PartnerPortalPage activeSection="builders" />} />
+            <Route path="projects" element={<PartnerPortalPage activeSection="projects" />} />
+            <Route path="inventory" element={<PartnerPortalPage activeSection="inventory" />} />
+            <Route path="leads" element={<PartnerPortalPage activeSection="leads" />} />
+            <Route path="visits" element={<PartnerPortalPage activeSection="visits" />} />
+            <Route path="quotations" element={<PartnerPortalPage activeSection="quotations" />} />
+            <Route path="commissions" element={<PartnerPortalPage activeSection="commissions" />} />
+            <Route path="profile" element={<PartnerPortalPage activeSection="profile" />} />
+            <Route path="*" element={<Navigate to="/partner/dashboard" replace />} />
+          </Route>
+
+          {/* D. PLATFORM SUPER ADMIN EXPERIENCE */}
+          <Route path="/admin" element={<SuperAdminGuard />}>
+            <Route index element={<Navigate to="/admin/dashboard" replace />} />
+            <Route path="dashboard" element={<SuperAdminConsolePage activeSection="dashboard" />} />
+            <Route path="builders" element={<SuperAdminConsolePage activeSection="builders" />} />
+            <Route
+              path="organizations"
+              element={<SuperAdminConsolePage activeSection="organizations" />}
+            />
+            <Route path="projects" element={<SuperAdminConsolePage activeSection="projects" />} />
+            <Route path="users" element={<SuperAdminConsolePage activeSection="users" />} />
+            <Route
+              path="subscriptions"
+              element={<SuperAdminConsolePage activeSection="subscriptions" />}
+            />
+            <Route path="payments" element={<SuperAdminConsolePage activeSection="payments" />} />
+            <Route path="credits" element={<SuperAdminConsolePage activeSection="credits" />} />
+            <Route
+              path="integrations"
+              element={<SuperAdminConsolePage activeSection="integrations" />}
+            />
+            <Route path="audit" element={<SuperAdminConsolePage activeSection="audit" />} />
+            <Route path="settings" element={<SuperAdminConsolePage activeSection="settings" />} />
+            <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
+          </Route>
+
+          <Route path="/super-admin/*" element={<Navigate to="/admin/dashboard" replace />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

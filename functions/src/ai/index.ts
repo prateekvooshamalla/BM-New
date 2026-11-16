@@ -10,6 +10,12 @@ import {
   type AuthenticatedActor,
 } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import {
+  calculateAiUsageCostPaise,
+  releaseWalletReservationService,
+  reserveWalletBalanceService,
+  settleAiWalletUsageService,
+} from '../billing';
 import { validateOpenAiAccountModels } from './models';
 import { getJobStatusTool } from './tools';
 import {
@@ -81,47 +87,16 @@ export async function executeAiTaskService(
     orgId: string;
     feature: AiFeatureTask;
     context: Record<string, unknown>;
+    requestId?: string;
     entityType?: string;
     entityId?: string;
   },
   customClient?: Pick<OpenAI, 'chat'>
-): Promise<{ text: string; log: AiUsageLog }> {
+): Promise<{ text: string; log: AiUsageLog; deduplicated?: boolean }> {
   const startMs = Date.now();
   const nowIso = new Date().toISOString();
 
-  // 1. Check SaaS AI Credit Budget
-  const subRef = db.collection('subscriptions').doc(params.orgId);
-  const subSnap = await subRef.get();
-  if (subSnap.exists) {
-    const sub = subSnap.data() as Subscription;
-    const totalAllowed =
-      sub.entitlements.monthlyAiCredits + (sub.addons?.extraAiCredits ?? 0);
-    if (sub.usageThisCycle.aiCreditsUsed >= totalAllowed) {
-      const blockedRef = db.collection('ai_usage_logs').doc();
-      await blockedRef.set({
-        id: blockedRef.id,
-        orgId: params.orgId,
-        uid: actor.uid,
-        feature: params.feature,
-        model: 'NONE',
-        promptVersion: PROMPT_VERSION,
-        inputTokens: 0,
-        outputTokens: 0,
-        estimatedCostUsd: 0,
-        creditsConsumed: 0,
-        latencyMs: Date.now() - startMs,
-        status: 'BUDGET_BLOCKED',
-        createdAt: nowIso,
-      } satisfies AiUsageLog);
-
-      throw new HttpsError(
-        'resource-exhausted',
-        `Monthly AI credit limit (${totalAllowed}) reached. Purchase an AI credit pack in Settings -> SaaS Subscription.`
-      );
-    }
-  }
-
-  // 2. Verify OpenAI API Key Configuration (Never simulate fake AI output!)
+  // 1. Verify OpenAI API Key Configuration (Never simulate fake AI output!)
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey && !customClient) {
     const unconfRef = db.collection('ai_usage_logs').doc();
@@ -149,8 +124,62 @@ export async function executeAiTaskService(
 
   const isComplex = COMPLEX_TASKS.has(params.feature);
   const model = isComplex
-    ? process.env.OPENAI_MODEL_PRIMARY || 'gpt-4o'
-    : process.env.OPENAI_MODEL_FAST || 'gpt-4o-mini';
+    ? process.env.OPENAI_MODEL_PRIMARY || 'gpt-4.1'
+    : process.env.OPENAI_MODEL_FAST || 'gpt-4.1-mini';
+
+  const requestId =
+    params.requestId || `ai_task_${params.orgId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const estimatedPaise = isComplex ? 100 : 25;
+
+  const subRef = db.collection('subscriptions').doc(params.orgId);
+  const subSnap = await subRef.get();
+
+  // 2. Reserve Prepaid AI Wallet Balance (Idempotent by requestId; blocks zero balance cleanly)
+  try {
+    const reservation = await reserveWalletBalanceService(db, {
+      orgId: params.orgId,
+      walletType: 'AI',
+      requestId,
+      estimatedPaise,
+      actorUid: actor.uid,
+      summary: `Reserve AI Wallet for ${params.feature}`,
+    });
+
+    if (reservation.alreadySettled) {
+      const existingSnap = await db
+        .collection('ai_usage_logs')
+        .where('orgId', '==', params.orgId)
+        .where('entityId', '==', requestId)
+        .limit(1)
+        .get();
+      if (!existingSnap.empty) {
+        const cached = existingSnap.docs[0]!.data() as AiUsageLog & { cachedText?: string };
+        return {
+          text: cached.cachedText ?? '',
+          log: cached,
+          deduplicated: true,
+        };
+      }
+    }
+  } catch (err) {
+    const blockedRef = db.collection('ai_usage_logs').doc();
+    await blockedRef.set({
+      id: blockedRef.id,
+      orgId: params.orgId,
+      uid: actor.uid,
+      feature: params.feature,
+      model: 'NONE',
+      promptVersion: PROMPT_VERSION,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostUsd: 0,
+      creditsConsumed: 0,
+      latencyMs: Date.now() - startMs,
+      status: 'BUDGET_BLOCKED',
+      createdAt: nowIso,
+    } satisfies AiUsageLog);
+    throw err;
+  }
 
   const openai = customClient ?? new OpenAI({ apiKey });
 
@@ -163,23 +192,42 @@ export async function executeAiTaskService(
     `Task instruction: ${TASK_INSTRUCTIONS[params.feature]}`,
   ].join('\n');
 
-  const completion = await openai.chat.completions.create({
-    model,
-    temperature: 0.2,
-    max_tokens: 600,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: JSON.stringify(params.context) },
-    ],
-  });
+  let completion: Awaited<ReturnType<typeof openai.chat.completions.create>>;
+  try {
+    completion = await openai.chat.completions.create({
+      model,
+      temperature: 0.2,
+      max_tokens: 600,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: JSON.stringify(params.context) },
+      ],
+    });
+  } catch (err) {
+    await releaseWalletReservationService(db, {
+      orgId: params.orgId,
+      walletType: 'AI',
+      requestId,
+      reason: err instanceof Error ? err.message : 'OpenAI call failed',
+    });
+    throw err;
+  }
 
   const text = completion.choices[0]?.message?.content?.trim() ?? '';
   const inputTokens = completion.usage?.prompt_tokens ?? 0;
   const outputTokens = completion.usage?.completion_tokens ?? 0;
   const creditsConsumed = isComplex ? 5 : 1;
-  const estimatedCostUsd = Number(
-    ((inputTokens * 0.0000025 + outputTokens * 0.00001)).toFixed(6)
-  );
+  const cost = calculateAiUsageCostPaise(model, inputTokens, outputTokens);
+
+  await settleAiWalletUsageService(db, {
+    orgId: params.orgId,
+    requestId,
+    actorUid: actor.uid,
+    feature: params.feature,
+    model,
+    inputTokens,
+    outputTokens,
+  });
 
   const logRef = db.collection('ai_usage_logs').doc();
   const log: AiUsageLog = {
@@ -191,16 +239,16 @@ export async function executeAiTaskService(
     promptVersion: PROMPT_VERSION,
     inputTokens,
     outputTokens,
-    estimatedCostUsd,
+    estimatedCostUsd: cost.estimatedCostUsd,
     creditsConsumed,
-    entityType: params.entityType,
-    entityId: params.entityId,
+    entityType: params.entityType ?? 'ai_request',
+    entityId: params.requestId ?? params.entityId,
     latencyMs: Date.now() - startMs,
     status: 'SUCCESS',
     createdAt: nowIso,
   };
 
-  await logRef.set(log);
+  await logRef.set({ ...log, cachedText: text });
 
   if (subSnap.exists) {
     const sub = subSnap.data() as Subscription;

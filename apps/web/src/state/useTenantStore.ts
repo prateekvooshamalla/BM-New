@@ -5,6 +5,7 @@ import type {
   PartnerMember,
   PartnerOrganization,
   Project,
+  TenantEntitlements,
 } from '@bharat-makaan/shared';
 
 export type ProjectScopeMode = 'ALL_PROJECTS' | 'PORTFOLIO_OVERVIEW' | 'SINGLE_PROJECT';
@@ -52,16 +53,19 @@ function writePersistedProjectScope(
 interface TenantState {
   uid: string | null;
   email: string | null;
+  emailVerified: boolean;
   displayName: string | null;
   isAuthLoading: boolean;
   isSuperAdmin: boolean;
   mfaEnrolledCount: number;
+  pendingUnverifiedInvitationsCount: number;
 
   organizations: Organization[];
   memberships: OrganizationMember[];
   activeOrgId: string | null;
   activeOrganization: Organization | null;
   activeMember: OrganizationMember | null;
+  activeEntitlements: TenantEntitlements | null;
 
   projects: Project[];
   projectScopeMode: ProjectScopeMode;
@@ -85,11 +89,14 @@ interface TenantState {
   setAuthContext: (ctx: {
     uid: string | null;
     email: string | null;
+    emailVerified?: boolean;
     displayName: string | null;
     isSuperAdmin: boolean;
     mfaEnrolledCount: number;
+    pendingUnverifiedInvitationsCount?: number;
     isAuthLoading: boolean;
   }) => void;
+  setActiveEntitlements: (entitlements: TenantEntitlements | null) => void;
   setOrganizationsAndMemberships: (
     orgs: Organization[],
     members: OrganizationMember[]
@@ -118,16 +125,19 @@ interface TenantState {
 export const useTenantStore = create<TenantState>((set, get) => ({
   uid: null,
   email: null,
+  emailVerified: false,
   displayName: null,
   isAuthLoading: true,
   isSuperAdmin: false,
   mfaEnrolledCount: 0,
+  pendingUnverifiedInvitationsCount: 0,
 
   organizations: [],
   memberships: [],
   activeOrgId: null,
   activeOrganization: null,
   activeMember: null,
+  activeEntitlements: null,
 
   projects: [],
   projectScopeMode: 'ALL_PROJECTS',
@@ -149,6 +159,7 @@ export const useTenantStore = create<TenantState>((set, get) => ({
   theme: 'light',
 
   setAuthContext: (ctx) => set((state) => ({ ...state, ...ctx })),
+  setActiveEntitlements: (activeEntitlements) => set({ activeEntitlements }),
 
   setOrganizationsAndMemberships: (orgs, members) =>
     set((state) => {
@@ -328,6 +339,9 @@ export const useTenantStore = create<TenantState>((set, get) => ({
       activeOrgId: null,
       activeOrganization: null,
       activeMember: null,
+      activeEntitlements: null,
+      emailVerified: false,
+      pendingUnverifiedInvitationsCount: 0,
       projects: [],
       projectScopeMode: 'ALL_PROJECTS',
       activeProjectId: null,

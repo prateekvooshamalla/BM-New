@@ -23,6 +23,7 @@ import {
   Sparkles,
   Sun,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import { PRIMARY_WEB_NAVIGATION } from '@bharat-makaan/config';
@@ -67,6 +68,7 @@ export function EnterpriseLayout() {
     mfaEnrolledCount,
     organizations,
     activeOrgId,
+    activeEntitlements,
     activeMember,
     projects,
     projectScopeMode,
@@ -105,7 +107,7 @@ export function EnterpriseLayout() {
 
   const handleSignOut = async () => {
     await signOut(auth);
-    navigate('/auth/login');
+    navigate('/login');
   };
 
   const showMfaWarning =
@@ -209,13 +211,13 @@ export function EnterpriseLayout() {
           </div>
         ))}
 
-        {/* AI Workspace & Dedicated Console Switchers */}
+        {/* AI Workspace, Billing & Dedicated Console Switchers */}
         <div className="border-t border-sidebar-border pt-3 space-y-1">
           <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            AI &amp; Dedicated Consoles
+            AI, Billing &amp; Consoles
           </div>
           <NavLink
-            to="/app/ai-studio"
+            to="/builder/ai-assistant"
             onClick={() => setMobileMenuOpen(false)}
             className={({ isActive }) =>
               `bm-nav-item ${isActive ? 'bg-sidebar-active text-sidebar-active-foreground font-semibold' : ''}`
@@ -230,6 +232,38 @@ export function EnterpriseLayout() {
               </>
             )}
           </NavLink>
+          <NavLink
+            to="/builder/billing"
+            onClick={() => setMobileMenuOpen(false)}
+            className={({ isActive }) =>
+              `bm-nav-item ${isActive ? 'bg-sidebar-active text-sidebar-active-foreground font-semibold' : ''}`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <Wallet
+                  className={`h-4 w-4 shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
+                />
+                <span>Billing &amp; Wallets</span>
+              </>
+            )}
+          </NavLink>
+          <NavLink
+            to="/builder/team"
+            onClick={() => setMobileMenuOpen(false)}
+            className={({ isActive }) =>
+              `bm-nav-item ${isActive ? 'bg-sidebar-active text-sidebar-active-foreground font-semibold' : ''}`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <Users
+                  className={`h-4 w-4 shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
+                />
+                <span>Team &amp; Permissions</span>
+              </>
+            )}
+          </NavLink>
           {partnerMemberships.length > 0 && (
             <NavLink to="/partner/dashboard" className="bm-nav-item">
               <Handshake className="h-4 w-4 text-muted-foreground" />
@@ -237,7 +271,7 @@ export function EnterpriseLayout() {
             </NavLink>
           )}
           {isSuperAdmin && (
-            <NavLink to="/super-admin" className="bm-nav-item">
+            <NavLink to="/admin/dashboard" className="bm-nav-item">
               <ShieldCheck className="h-4 w-4 text-primary" />
               <span>Platform Super Admin</span>
             </NavLink>
@@ -382,6 +416,29 @@ export function EnterpriseLayout() {
           </div>
         )}
 
+        {activeEntitlements &&
+          (activeEntitlements.workspaceAccessMode === 'GRACE_WARNING' ||
+            activeEntitlements.workspaceAccessMode === 'READ_ONLY_SUSPENDED') && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-red-200 bg-red-50 px-6 py-2 text-xs text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 shrink-0" />
+                <span>
+                  {activeEntitlements.workspaceAccessMode === 'GRACE_WARNING'
+                    ? 'Subscription payment overdue — 7-day grace period active. Renew now to avoid read-only workspace suspension.'
+                    : 'Subscription suspended — workspace is in Read-Only Preservation Mode (customer records & exports remain intact).'}
+                </span>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => navigate('/builder/billing')}
+              >
+                Recover Subscription
+              </Button>
+            </div>
+          )}
+
         {showMfaWarning && (
           <div className="flex items-center justify-between border-b border-amber-200 bg-amber-50/80 px-6 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
             <div className="flex items-center gap-2">
@@ -395,7 +452,7 @@ export function EnterpriseLayout() {
               variant="outline"
               size="sm"
               className="h-7 text-xs"
-              onClick={() => navigate('/app/settings?tab=security')}
+              onClick={() => navigate('/builder/settings?tab=security')}
             >
               Configure MFA
             </Button>

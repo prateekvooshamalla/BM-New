@@ -11,6 +11,7 @@ import {
   type ProjectStructureTemplateKey,
   type ProjectType,
   type Subscription,
+  type TenantEntitlements,
   type Tower,
 } from '@bharat-makaan/shared';
 import {
@@ -20,6 +21,7 @@ import {
   createProjectSchema,
   createTowerSchema,
   currencyCodeSchema,
+  setProjectLifecycleStatusSchema,
 } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
@@ -57,16 +59,51 @@ export async function createProjectService(
   return db.runTransaction(async (tx) => {
     const orgRef = db.collection('organizations').doc(input.orgId);
     const subRef = db.collection('subscriptions').doc(input.orgId);
-    const [orgSnap, subSnap] = await Promise.all([tx.get(orgRef), tx.get(subRef)]);
+    const entRef = db.collection('entitlements').doc(input.orgId);
+    const existingProjectsQuery = db
+      .collection('projects')
+      .where('orgId', '==', input.orgId);
+
+    const [orgSnap, subSnap, entSnap, existingProjectsSnap] = await Promise.all([
+      tx.get(orgRef),
+      tx.get(subRef),
+      tx.get(entRef),
+      tx.get(existingProjectsQuery),
+    ]);
     const org = orgSnap.exists ? (orgSnap.data() as Organization) : null;
 
-    if (subSnap.exists) {
+    if (org?.status === 'SUSPENDED') {
+      throw new HttpsError(
+        'permission-denied',
+        'Organization is suspended; cannot create active projects.'
+      );
+    }
+
+    const activeProjectsCount = existingProjectsSnap.docs.filter(
+      (d) => ((d.data() as Project).lifecycleStatus ?? 'ACTIVE') === 'ACTIVE'
+    ).length;
+
+    if (entSnap.exists) {
+      const ent = entSnap.data() as TenantEntitlements;
+      if (ent.workspaceAccessMode === 'READ_ONLY_SUSPENDED') {
+        throw new HttpsError(
+          'failed-precondition',
+          'SUBSCRIPTION_READ_ONLY: Subscription is cancelled or read-only. Renew your builder package in Billing to create projects.'
+        );
+      }
+      if (activeProjectsCount >= ent.subscribedProjectCapacity) {
+        throw new HttpsError(
+          'resource-exhausted',
+          `Project limit reached (${ent.subscribedProjectCapacity} active project slot(s) on ${ent.packageCode}). Upgrade to Multi-Project Builder or add paid project capacity in Billing.`
+        );
+      }
+    } else if (subSnap.exists) {
       const sub = subSnap.data() as Subscription;
       const maxProjects =
         sub.entitlements.maxProjects === -1
           ? Infinity
-          : sub.entitlements.maxProjects + sub.addons.extraProjects;
-      if (sub.usageThisCycle.projectsCount >= maxProjects) {
+          : sub.entitlements.maxProjects + (sub.addons?.extraProjects ?? 0);
+      if (activeProjectsCount >= maxProjects) {
         throw new HttpsError(
           'resource-exhausted',
           `Project limit reached (${maxProjects}). Upgrade SaaS plan or add extra project entitlement.`
@@ -74,14 +111,10 @@ export async function createProjectService(
       }
     }
 
-    const dupCodeSnap = await tx.get(
-      db
-        .collection('projects')
-        .where('orgId', '==', input.orgId)
-        .where('code', '==', input.code.toUpperCase())
-        .limit(1)
+    const dupCode = existingProjectsSnap.docs.some(
+      (d) => (d.data() as Project).code === input.code.toUpperCase()
     );
-    if (!dupCodeSnap.empty) {
+    if (dupCode) {
       throw new HttpsError(
         'already-exists',
         `Project code "${input.code.toUpperCase()}" already exists in this organization.`
@@ -95,12 +128,20 @@ export async function createProjectService(
     const tplDef = PROJECT_STRUCTURE_TEMPLATES[structureTemplate];
 
     const projectRef = db.collection('projects').doc();
+    const projectSlug = `${input.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48)}-${projectRef.id.slice(0, 6).toLowerCase()}`;
     const project: Project = {
       id: projectRef.id,
       orgId: input.orgId,
       builderName: input.builderName.trim(),
       name: input.name.trim(),
+      slug: projectSlug,
       code: input.code.trim().toUpperCase(),
+      lifecycleStatus: 'ACTIVE',
       countryCode,
       stateOrRegion: input.stateOrRegion?.trim() || org?.stateOrRegion || undefined,
       city: input.city.trim(),
@@ -161,10 +202,16 @@ export async function createProjectService(
 
     tx.set(projectRef, project);
 
+    const nextActiveCount = activeProjectsCount + 1;
     if (subSnap.exists) {
-      const sub = subSnap.data() as Subscription;
       tx.update(subRef, {
-        'usageThisCycle.projectsCount': sub.usageThisCycle.projectsCount + 1,
+        'usageThisCycle.projectsCount': nextActiveCount,
+        updatedAt: nowIso,
+      });
+    }
+    if (entSnap.exists) {
+      tx.update(entRef, {
+        activeProjectsCount: nextActiveCount,
         updatedAt: nowIso,
       });
     }
@@ -536,5 +583,123 @@ export const updateProjectConfiguration = onCall(async (request) => {
     actor,
     member?.role ?? 'PLATFORM_SUPER_ADMIN',
     input
+  );
+});
+
+export async function setProjectLifecycleStatusService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  rawInput: unknown
+): Promise<Project> {
+  const input = setProjectLifecycleStatusSchema.parse(rawInput);
+  const nowIso = new Date().toISOString();
+
+  return db.runTransaction(async (tx) => {
+    const projRef = db.collection('projects').doc(input.projectId);
+    const entRef = db.collection('entitlements').doc(input.orgId);
+    const subRef = db.collection('subscriptions').doc(input.orgId);
+    const allProjQuery = db.collection('projects').where('orgId', '==', input.orgId);
+
+    const [projSnap, entSnap, subSnap, allProjSnap] = await Promise.all([
+      tx.get(projRef),
+      tx.get(entRef),
+      tx.get(subRef),
+      tx.get(allProjQuery),
+    ]);
+
+    if (!projSnap.exists || projSnap.data()?.orgId !== input.orgId) {
+      throw new HttpsError('not-found', 'Project not found in organization.');
+    }
+
+    const current = projSnap.data() as Project;
+    const prevLifecycle = current.lifecycleStatus ?? 'ACTIVE';
+    if (prevLifecycle === input.lifecycleStatus) {
+      return current;
+    }
+
+    const otherActiveCount = allProjSnap.docs.filter(
+      (d) =>
+        d.id !== input.projectId &&
+        ((d.data() as Project).lifecycleStatus ?? 'ACTIVE') === 'ACTIVE'
+    ).length;
+
+    if (input.lifecycleStatus === 'ACTIVE' && entSnap.exists) {
+      const ent = entSnap.data() as TenantEntitlements;
+      if (ent.workspaceAccessMode === 'READ_ONLY_SUSPENDED') {
+        throw new HttpsError(
+          'failed-precondition',
+          'SUBSCRIPTION_READ_ONLY: Renew your subscription before reactivating archived projects.'
+        );
+      }
+      if (otherActiveCount + 1 > ent.subscribedProjectCapacity) {
+        throw new HttpsError(
+          'resource-exhausted',
+          `Project limit reached (${ent.subscribedProjectCapacity} active project slot(s)). Upgrade package or add project slots in Billing before reactivating "${current.name}".`
+        );
+      }
+    }
+
+    const nextActiveCount =
+      input.lifecycleStatus === 'ACTIVE' ? otherActiveCount + 1 : otherActiveCount;
+
+    const updated: Project = {
+      ...current,
+      lifecycleStatus: input.lifecycleStatus,
+      isPublicPublished:
+        input.lifecycleStatus === 'ARCHIVED_READ_ONLY' ? false : current.isPublicPublished,
+      updatedAt: nowIso,
+    };
+
+    tx.set(projRef, updated);
+    if (entSnap.exists) {
+      tx.update(entRef, {
+        activeProjectsCount: nextActiveCount,
+        updatedAt: nowIso,
+      });
+    }
+    if (subSnap.exists) {
+      tx.update(subRef, {
+        'usageThisCycle.projectsCount': nextActiveCount,
+        updatedAt: nowIso,
+      });
+    }
+
+    await writeAuditEvent(
+      db,
+      {
+        orgId: input.orgId,
+        actorUid: actor.uid,
+        actorEmail: actor.email,
+        actorRole,
+        action:
+          input.lifecycleStatus === 'ACTIVE'
+            ? 'PROJECT_REACTIVATED'
+            : 'PROJECT_ARCHIVED_READ_ONLY',
+        category: 'INVENTORY',
+        entityType: 'project',
+        entityId: updated.id,
+        summary: `Changed project "${updated.name}" lifecycle status to ${input.lifecycleStatus}. Reason: ${input.reason}`,
+      },
+      tx
+    );
+
+    return updated;
+  });
+}
+
+export const setProjectLifecycleStatus = onCall(async (request) => {
+  const parsed = setProjectLifecycleStatusSchema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(
+    request,
+    parsed.orgId,
+    'projects:edit',
+    parsed.projectId
+  );
+  return setProjectLifecycleStatusService(
+    adminDb,
+    actor,
+    member?.role ?? 'PLATFORM_SUPER_ADMIN',
+    parsed
   );
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createOrganizationService } from '../../functions/src/organizations';
+import { superAdminAdjustWalletService } from '../../functions/src/billing';
 import {
   submitPublicLeadFormService,
   upsertLeadFormService,
@@ -141,7 +142,20 @@ describe('Phase 7 — Universal Lead Capture Forms, Spam Guards & Centralized Op
 
     if (savedKey) process.env.OPENAI_API_KEY = savedKey;
 
-    // With injected mocked OpenAI SDK client -> logs tokens, deducts credits, writes audit event
+    // Credit prepaid AI Wallet first (zero initial wallet balance blocks chargeable calls!)
+    await superAdminAdjustWalletService(
+      db,
+      { uid: 'uid-sa', email: 'prateek.parts@gmail.com', isSuperAdmin: true, mfaVerified: true },
+      {
+        orgId: organization.id,
+        walletType: 'AI',
+        creditDeltaPaise: 50000,
+        requestId: 'req_ai_phase7_seed',
+        reason: 'Prepaid AI test wallet top-up',
+      }
+    );
+
+    // With injected mocked OpenAI SDK client -> logs tokens, settles prepaid AI wallet, writes audit event
     const mockOpenAi = {
       chat: {
         completions: {
@@ -173,9 +187,9 @@ describe('Phase 7 — Universal Lead Capture Forms, Spam Guards & Centralized Op
     expect(aiRes.log.inputTokens).toBe(140);
     expect(aiRes.log.status).toBe('SUCCESS');
 
-    // Exhaust subscription AI credits and verify budget cap blocks further calls
-    await db.collection('subscriptions').doc(organization.id).update({
-      'usageThisCycle.aiCreditsUsed': 500, // Starter limit = 500
+    // Exhaust prepaid AI wallet balance to 0 Paise and verify further chargeable calls are blocked
+    await db.collection('entitlements').doc(organization.id).update({
+      aiBalancePaise: 0,
     });
 
     await expect(
@@ -189,6 +203,6 @@ describe('Phase 7 — Universal Lead Capture Forms, Spam Guards & Centralized Op
         },
         mockOpenAi
       )
-    ).rejects.toThrow(/Monthly AI credit limit/);
+    ).rejects.toThrow(/Insufficient prepaid AI Wallet/i);
   });
 });

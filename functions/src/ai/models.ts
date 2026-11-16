@@ -9,6 +9,12 @@ import {
 } from '@bharat-makaan/shared';
 import type { AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import {
+  calculateAiUsageCostPaise,
+  releaseWalletReservationService,
+  reserveWalletBalanceService,
+  settleAiWalletUsageService,
+} from '../billing';
 
 export const AI_PROMPT_VERSION = 'bm-ai-assistant-v2.0';
 
@@ -173,44 +179,14 @@ export async function invokeStructuredResponsesApi<T>(params: {
   schemaName: string;
   jsonSchema: Record<string, unknown>;
   creditsCost?: number;
+  requestId?: string;
   entityType?: string;
   entityId?: string;
   customClient?: MinimalResponsesClient;
-}): Promise<{ parsed: T; modelUsed: string; log: AiUsageLog }> {
+}): Promise<{ parsed: T; modelUsed: string; log: AiUsageLog; deduplicated?: boolean }> {
   const startMs = Date.now();
   const nowIso = new Date().toISOString();
   const creditsCost = params.creditsCost ?? 2;
-
-  const subRef = params.db.collection('subscriptions').doc(params.orgId);
-  const subSnap = await subRef.get();
-  if (subSnap.exists) {
-    const sub = subSnap.data() as Subscription;
-    const totalAllowed =
-      sub.entitlements.monthlyAiCredits + (sub.addons?.extraAiCredits ?? 0);
-    if (sub.usageThisCycle.aiCreditsUsed + creditsCost > totalAllowed) {
-      const blockedRef = params.db.collection('ai_usage_logs').doc();
-      await blockedRef.set({
-        id: blockedRef.id,
-        orgId: params.orgId,
-        uid: params.actor.uid,
-        feature: params.feature,
-        model: params.model,
-        promptVersion: AI_PROMPT_VERSION,
-        inputTokens: 0,
-        outputTokens: 0,
-        estimatedCostUsd: 0,
-        creditsConsumed: 0,
-        latencyMs: Date.now() - startMs,
-        status: 'BUDGET_BLOCKED',
-        createdAt: nowIso,
-      } satisfies AiUsageLog);
-
-      throw new HttpsError(
-        'resource-exhausted',
-        `Monthly AI credit limit (${totalAllowed}) reached for this organization.`
-      );
-    }
-  }
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey && !params.customClient) {
@@ -220,21 +196,88 @@ export async function invokeStructuredResponsesApi<T>(params: {
     );
   }
 
+  const requestId =
+    params.requestId || `ai_resp_${params.orgId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const estimatedPaise = Math.max(50, creditsCost * 25);
+
+  const subRef = params.db.collection('subscriptions').doc(params.orgId);
+  const subSnap = await subRef.get();
+
+  try {
+    const reservation = await reserveWalletBalanceService(params.db, {
+      orgId: params.orgId,
+      walletType: 'AI',
+      requestId,
+      estimatedPaise,
+      actorUid: params.actor.uid,
+      summary: `Reserve AI Wallet for ${params.feature} (${params.model})`,
+    });
+
+    if (reservation.alreadySettled) {
+      const existingLogSnap = await params.db
+        .collection('ai_usage_logs')
+        .where('orgId', '==', params.orgId)
+        .where('entityId', '==', requestId)
+        .limit(1)
+        .get();
+      if (!existingLogSnap.empty) {
+        const prev = existingLogSnap.docs[0]!.data() as AiUsageLog & { cachedOutput?: T };
+        if (prev.cachedOutput !== undefined) {
+          return {
+            parsed: prev.cachedOutput,
+            modelUsed: prev.model,
+            log: prev,
+            deduplicated: true,
+          };
+        }
+      }
+    }
+  } catch (err) {
+    const blockedRef = params.db.collection('ai_usage_logs').doc();
+    await blockedRef.set({
+      id: blockedRef.id,
+      orgId: params.orgId,
+      uid: params.actor.uid,
+      feature: params.feature,
+      model: params.model,
+      promptVersion: AI_PROMPT_VERSION,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostUsd: 0,
+      creditsConsumed: 0,
+      latencyMs: Date.now() - startMs,
+      status: 'BUDGET_BLOCKED',
+      createdAt: nowIso,
+    } satisfies AiUsageLog);
+    throw err;
+  }
+
   const client = (params.customClient ?? new OpenAI({ apiKey })) as MinimalResponsesClient;
 
-  const response = await client.responses.create({
-    model: params.model,
-    instructions: params.instructions,
-    input: params.input,
-    text: {
-      format: {
-        type: 'json_schema',
-        name: params.schemaName,
-        strict: true,
-        schema: params.jsonSchema,
+  let response: Awaited<ReturnType<MinimalResponsesClient['responses']['create']>>;
+  try {
+    response = await client.responses.create({
+      model: params.model,
+      instructions: params.instructions,
+      input: params.input,
+      text: {
+        format: {
+          type: 'json_schema',
+          name: params.schemaName,
+          strict: true,
+          schema: params.jsonSchema,
+        },
       },
-    },
-  });
+    });
+  } catch (err) {
+    await releaseWalletReservationService(params.db, {
+      orgId: params.orgId,
+      walletType: 'AI',
+      requestId,
+      reason: err instanceof Error ? err.message : 'OpenAI provider error',
+    });
+    throw err;
+  }
 
   let rawJson = response.output_text ?? '';
   if (!rawJson && Array.isArray(response.output)) {
@@ -250,9 +293,18 @@ export async function invokeStructuredResponsesApi<T>(params: {
   const parsed = JSON.parse(rawJson) as T;
   const inputTokens = response.usage?.input_tokens ?? 0;
   const outputTokens = response.usage?.output_tokens ?? 0;
-  const estimatedCostUsd = Number(
-    (inputTokens * 0.000003 + outputTokens * 0.000012).toFixed(6)
-  );
+  const resolvedModel = response.model || params.model;
+  const cost = calculateAiUsageCostPaise(resolvedModel, inputTokens, outputTokens);
+
+  await settleAiWalletUsageService(params.db, {
+    orgId: params.orgId,
+    requestId,
+    actorUid: params.actor.uid,
+    feature: params.feature,
+    model: resolvedModel,
+    inputTokens,
+    outputTokens,
+  });
 
   const logRef = params.db.collection('ai_usage_logs').doc();
   const log: AiUsageLog = {
@@ -260,19 +312,19 @@ export async function invokeStructuredResponsesApi<T>(params: {
     orgId: params.orgId,
     uid: params.actor.uid,
     feature: params.feature,
-    model: response.model || params.model,
+    model: resolvedModel,
     promptVersion: AI_PROMPT_VERSION,
     inputTokens,
     outputTokens,
-    estimatedCostUsd,
+    estimatedCostUsd: cost.estimatedCostUsd,
     creditsConsumed: creditsCost,
-    entityType: params.entityType,
-    entityId: params.entityId,
+    entityType: params.entityType ?? 'ai_request',
+    entityId: params.requestId ?? params.entityId,
     latencyMs: Date.now() - startMs,
     status: 'SUCCESS',
     createdAt: nowIso,
   };
-  await logRef.set(log);
+  await logRef.set({ ...log, cachedOutput: parsed });
 
   if (subSnap.exists) {
     const sub = subSnap.data() as Subscription;
@@ -291,7 +343,9 @@ export async function invokeStructuredResponsesApi<T>(params: {
     category: 'AI',
     entityType: params.entityType ?? 'ai_session',
     entityId: params.entityId ?? log.id,
-    summary: `Executed OpenAI Responses API ${params.feature} (${log.model}, ${inputTokens + outputTokens} tokens).`,
+    summary: `Executed OpenAI Responses API ${params.feature} (${log.model}, ${inputTokens + outputTokens} tokens, ₹${(
+      cost.chargePaise / 100
+    ).toFixed(2)}).`,
   });
 
   return { parsed, modelUsed: log.model, log };

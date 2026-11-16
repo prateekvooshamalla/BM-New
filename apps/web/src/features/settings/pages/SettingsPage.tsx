@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { doc, onSnapshot, updateDoc, collection, query, where } from 'firebase/firestore';
 import { multiFactor, TotpMultiFactorGenerator } from 'firebase/auth';
-import { useSearchParams } from 'react-router-dom';
-import { Building2, CreditCard, Plug, ShieldCheck, Sliders, Users } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Building2, CreditCard, Plug, ShieldCheck, Sliders, Users, Wallet } from 'lucide-react';
 import { DEFAULT_SAAS_PLANS } from '@bharat-makaan/config';
 import { formatInr, type IntegrationConfig, type Subscription } from '@bharat-makaan/shared';
 import { auth, db } from '@/lib/firebase';
@@ -27,11 +27,12 @@ const PROVIDERS = [
   { id: 'EMAIL', label: 'Transactional Email Provider', desc: 'Quotation PDF delivery, staff invitations & demand reminders.' },
 ] as const;
 
-export function SettingsPage() {
+export function SettingsPage({ defaultTab = 'organization' }: { defaultTab?: string } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get('tab') || 'organization';
+  const activeTab = searchParams.get('tab') || defaultTab;
 
-  const { activeOrgId, activeOrganization, mfaEnrolledCount } = useTenantStore();
+  const { activeOrgId, activeOrganization, activeEntitlements, mfaEnrolledCount } =
+    useTenantStore();
   const [subscription, setSubscription] = React.useState<Subscription | null>(null);
   const [integrations, setIntegrations] = React.useState<IntegrationConfig[]>([]);
 
@@ -295,82 +296,81 @@ export function SettingsPage() {
 
         <TabsContent value="billing">
           <div className="space-y-4">
-            {subscription && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle>Active Plan: {subscription.planCode}</CardTitle>
-                      <CardDescription>
-                        Cycle: {subscription.billingCycle} • Renews{' '}
-                        {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
-                      </CardDescription>
-                    </div>
-                    <StatusBadge status={subscription.status} />
+            <Card>
+              <CardHeader>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <CardTitle>
+                      Active Package:{' '}
+                      {activeEntitlements?.packageCode ?? subscription?.planCode ?? 'SINGLE_PROJECT'}
+                    </CardTitle>
+                    <CardDescription>
+                      Workspace Mode:{' '}
+                      {activeEntitlements?.workspaceAccessMode ?? 'ACTIVE'} •{' '}
+                      {subscription
+                        ? `Renews ${new Date(subscription.currentPeriodEnd).toLocaleDateString()}`
+                        : 'Monthly Razorpay Subscription'}
+                    </CardDescription>
                   </div>
-                </CardHeader>
-                <CardContent className="grid gap-4 sm:grid-cols-4 text-xs">
-                  <div className="rounded-md border border-border p-3">
-                    <div className="text-muted-foreground">Projects Used</div>
-                    <div className="mt-1 text-base font-semibold">
-                      {subscription.usageThisCycle.projectsCount} /{' '}
-                      {subscription.entitlements.maxProjects === -1
-                        ? 'Unlimited'
-                        : subscription.entitlements.maxProjects}
-                    </div>
+                  <div className="flex items-center gap-2">
+                    {subscription && <StatusBadge status={subscription.status} />}
+                    <Button size="sm" asChild>
+                      <Link to="/builder/billing">
+                        <Wallet className="h-3.5 w-3.5" />
+                        Open Full Billing &amp; Wallets Console
+                      </Link>
+                    </Button>
                   </div>
-                  <div className="rounded-md border border-border p-3">
-                    <div className="text-muted-foreground">Employee Seats</div>
-                    <div className="mt-1 text-base font-semibold">
-                      {subscription.usageThisCycle.activeUsersCount} /{' '}
-                      {subscription.entitlements.maxUsers === -1
-                        ? 'Unlimited'
-                        : subscription.entitlements.maxUsers}
-                    </div>
+                </div>
+              </CardHeader>
+              <CardContent className="grid gap-4 sm:grid-cols-3 text-xs">
+                <div className="rounded-md border border-border p-3">
+                  <div className="text-muted-foreground">Active Project Capacity</div>
+                  <div className="mt-1 text-base font-semibold">
+                    {activeEntitlements?.activeProjectsCount ??
+                      subscription?.usageThisCycle.projectsCount ??
+                      0}{' '}
+                    /{' '}
+                    {activeEntitlements?.subscribedProjectCapacity ??
+                      subscription?.entitlements.maxProjects ??
+                      1}
                   </div>
-                  <div className="rounded-md border border-border p-3">
-                    <div className="text-muted-foreground">Monthly AI Credits</div>
-                    <div className="mt-1 text-base font-semibold">
-                      {subscription.usageThisCycle.aiCreditsUsed} /{' '}
-                      {subscription.entitlements.monthlyAiCredits}
-                    </div>
+                </div>
+                <div className="rounded-md border border-border p-3">
+                  <div className="text-muted-foreground">Prepaid AI Wallet Balance</div>
+                  <div className="mt-1 text-base font-semibold text-primary">
+                    {formatInr((activeEntitlements?.aiBalancePaise ?? 0) / 100)}
                   </div>
-                  <div className="rounded-md border border-border p-3">
-                    <div className="text-muted-foreground">WhatsApp Quota</div>
-                    <div className="mt-1 text-base font-semibold">
-                      {subscription.usageThisCycle.whatsappMessagesSent} /{' '}
-                      {subscription.entitlements.monthlyWhatsappQuota}
-                    </div>
+                </div>
+                <div className="rounded-md border border-border p-3">
+                  <div className="text-muted-foreground">Prepaid WhatsApp Wallet Balance</div>
+                  <div className="mt-1 text-base font-semibold text-primary">
+                    {formatInr((activeEntitlements?.whatsappBalancePaise ?? 0) / 100)}
                   </div>
-                </CardContent>
-              </Card>
-            )}
+                </div>
+              </CardContent>
+            </Card>
 
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2">
               {Object.values(DEFAULT_SAAS_PLANS).map((plan) => (
                 <Card key={plan.code}>
                   <CardHeader>
                     <CardTitle className="text-sm">{plan.name}</CardTitle>
                     <div className="text-xl font-bold text-foreground">
-                      {plan.monthlyPriceInr ? `${formatInr(plan.monthlyPriceInr)}/mo` : 'Custom'}
+                      {plan.code === 'SINGLE_PROJECT'
+                        ? `${formatInr(plan.monthlyPriceInr)} / month + GST`
+                        : `${formatInr(plan.perProjectMonthlyInr)} / project / month + GST (min 2)`}
                     </div>
                     <CardDescription>{plan.tagline}</CardDescription>
                   </CardHeader>
                   <CardContent className="text-xs text-muted-foreground space-y-1.5">
                     <div>
-                      Projects:{' '}
-                      {plan.entitlements.maxProjects === -1
-                        ? 'Unlimited'
-                        : plan.entitlements.maxProjects}
+                      Project Slots:{' '}
+                      {plan.code === 'SINGLE_PROJECT'
+                        ? '1 Active Project (Hard Limit)'
+                        : 'Minimum 2 Active Projects (INR 9,998/mo)'}
                     </div>
-                    <div>
-                      Users:{' '}
-                      {plan.entitlements.maxUsers === -1
-                        ? 'Unlimited'
-                        : plan.entitlements.maxUsers}
-                    </div>
-                    <div>AI Credits: {plan.entitlements.monthlyAiCredits.toLocaleString('en-IN')}/mo</div>
-                    <div>WhatsApp: {plan.entitlements.monthlyWhatsappQuota.toLocaleString('en-IN')}/mo</div>
+                    <div>AI &amp; WhatsApp Usage: Prepaid Wallets (Append-only Ledger)</div>
                   </CardContent>
                 </Card>
               ))}

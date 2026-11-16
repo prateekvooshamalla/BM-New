@@ -1,14 +1,9 @@
 import crypto from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https';
-import Razorpay from 'razorpay';
-import { z } from 'zod';
-import { DEFAULT_SAAS_PLANS, type SaasPlanCode } from '@bharat-makaan/config';
 import type {
   FormSubmission,
   LeadCaptureForm,
-  SaasInvoice,
-  Subscription,
 } from '@bharat-makaan/shared';
 import {
   publicFormSubmissionSchema,
@@ -18,7 +13,10 @@ import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { ingestLeadService } from '../leads';
 import { verifyMetaWebhookSignature } from '../whatsapp';
-import { verifyRazorpayHmacSignature } from '../collections';
+import {
+  initiateSubscriptionCheckoutService,
+  processRazorpayWebhookService,
+} from '../billing';
 import { writeAuditEvent } from '../audit';
 
 // ============================================================================
@@ -331,108 +329,23 @@ export const googleAdsWebhook = onRequest(async (req, res) => {
 });
 
 // ============================================================================
-// 3. Bharat Makaan SaaS Subscription Billing (Strictly Separate from Builder Collections)
+// 3. Legacy Compatibility Aliases -> Delegated to Authoritative `billing` Module
 // ============================================================================
 
 export const changeSaasSubscriptionPlan = onCall(async (request) => {
-  const schema = z.object({
-    orgId: z.string().min(1),
-    planCode: z.enum(['STARTER', 'GROWTH', 'BUILDER_PRO', 'ENTERPRISE']),
-    billingCycle: z.enum(['MONTHLY', 'ANNUAL']),
-    clientPlatform: z.enum(['WEB', 'IOS', 'ANDROID']).default('WEB'),
-    addons: z
-      .object({
-        extraUsers: z.number().int().min(0).default(0),
-        extraProjects: z.number().int().min(0).default(0),
-        extraAiCredits: z.number().int().min(0).default(0),
-        extraWhatsappQuota: z.number().int().min(0).default(0),
-      })
-      .default({}),
+  const data = (request.data ?? {}) as Record<string, unknown>;
+  const orgId = String(data.orgId || '');
+  const { actor } = await requireOrgPermission(request, orgId, 'billing:manage', null, {
+    isReadOrBillingOperation: true,
   });
-  const input = schema.parse(request.data);
-  const { actor } = await requireOrgPermission(request, input.orgId, 'billing:manage');
-
-  // Mobile App-Store Billing Compliance Guard (Section 20)
-  if (input.clientPlatform === 'IOS' || input.clientPlatform === 'ANDROID') {
-    throw new HttpsError(
-      'failed-precondition',
-      'Digital SaaS plan upgrades must be completed via the Enterprise Web Billing Portal in accordance with mobile app-store guidelines.'
-    );
-  }
-
-  const plan = DEFAULT_SAAS_PLANS[input.planCode as SaasPlanCode];
-  if (plan.isCustomPricing) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Enterprise custom pricing is provisioned by Platform Super Admin.'
-    );
-  }
-
-  const baseInr =
-    input.billingCycle === 'ANNUAL'
-      ? (plan.annualPriceInr ?? 29990)
-      : (plan.monthlyPriceInr ?? 2999);
-  const addonInr =
-    input.addons.extraUsers * plan.addonRatesInr.extraUserMonthly +
-    input.addons.extraProjects * plan.addonRatesInr.extraProjectMonthly;
-
-  const subtotalInr = baseInr + addonInr;
-  const gstInr = Math.round(subtotalInr * 0.18);
-  const totalInr = subtotalInr + gstInr;
-  const nowIso = new Date().toISOString();
-
-  const invRef = adminDb.collection('invoices').doc();
-  let razorpayOrderId: string | undefined;
-
-  if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-    const rzp = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-    const order = await rzp.orders.create({
-      amount: totalInr * 100,
-      currency: 'INR',
-      receipt: invRef.id,
-      notes: {
-        system: 'BHARAT_MAKAAN_SAAS_BILLING',
-        orgId: input.orgId,
-        invoiceId: invRef.id,
-        planCode: input.planCode,
-        billingCycle: input.billingCycle,
-      },
-    });
-    razorpayOrderId = order.id;
-  }
-
-  const invoice: SaasInvoice = {
-    id: invRef.id,
-    orgId: input.orgId,
-    invoiceNumber: `BM-INV-${invRef.id.slice(0, 6).toUpperCase()}`,
-    subscriptionId: input.orgId,
-    billingReason: 'SUBSCRIPTION',
-    subtotalInr,
-    gstInr,
-    totalInr,
-    status: 'ISSUED',
-    razorpayOrderId,
-    razorpaySignatureVerified: false,
-    issuedAt: nowIso,
-    paidAt: null,
-  };
-
-  await invRef.set(invoice);
-
-  await writeAuditEvent(adminDb, {
-    orgId: input.orgId,
-    actorUid: actor.uid,
-    action: 'SAAS_INVOICE_ISSUED',
-    category: 'BILLING',
-    entityType: 'invoice',
-    entityId: invoice.id,
-    summary: `Issued SaaS invoice ${invoice.invoiceNumber} for ${input.planCode} (${input.billingCycle}) = ₹${totalInr}.`,
+  return initiateSubscriptionCheckoutService(adminDb, actor, {
+    orgId,
+    packageCode: data.planCode === 'MULTI_PROJECT' ? 'MULTI_PROJECT' : 'SINGLE_PROJECT',
+    requestedProjectCapacity: Number(data.requestedProjectCapacity ?? 1),
+    onboardingServiceCode: 'SELF_SERVICE',
+    clientPlatform: (data.clientPlatform as string) || 'WEB',
+    idempotencyKey: String(data.idempotencyKey || `legacy_${orgId}_${Date.now()}`),
   });
-
-  return { invoice };
 });
 
 export const razorpaySaasWebhook = onRequest(async (req, res) => {
@@ -440,55 +353,20 @@ export const razorpaySaasWebhook = onRequest(async (req, res) => {
     res.status(405).send('Method Not Allowed');
     return;
   }
-
   const secret = process.env.RAZORPAY_SAAS_WEBHOOK_SECRET || '';
-  if (!verifyRazorpayHmacSignature(req.rawBody, req.header('x-razorpay-signature'), secret)) {
-    res.status(401).json({ error: 'Invalid SaaS webhook signature.' });
-    return;
+  try {
+    const result = await processRazorpayWebhookService({
+      db: adminDb,
+      rawBody: req.rawBody,
+      signatureHeader: req.header('x-razorpay-signature'),
+      eventIdHeader: req.header('x-razorpay-event-id'),
+      webhookSecret: secret,
+    });
+    res.status(200).json(result);
+  } catch (err) {
+    const code = err instanceof HttpsError && err.code === 'unauthenticated' ? 401 : 400;
+    res.status(code).json({
+      error: err instanceof Error ? err.message : 'Invalid SaaS webhook signature.',
+    });
   }
-
-  const event = req.body as any;
-  if (event?.event === 'payment.captured') {
-    const payment = event?.payload?.payment?.entity;
-    const notes = payment?.notes ?? {};
-    if (notes.system === 'BHARAT_MAKAAN_SAAS_BILLING' && notes.invoiceId && notes.orgId) {
-      const invRef = adminDb.collection('invoices').doc(String(notes.invoiceId));
-      const subRef = adminDb.collection('subscriptions').doc(String(notes.orgId));
-      const planCode = (notes.planCode as SaasPlanCode) || 'GROWTH';
-      const plan = DEFAULT_SAAS_PLANS[planCode];
-      const now = new Date();
-      const nowIso = now.toISOString();
-      const cycleDays = notes.billingCycle === 'ANNUAL' ? 365 : 30;
-      const periodEnd = new Date(now.getTime() + cycleDays * 86400 * 1000).toISOString();
-
-      await invRef.update({
-        status: 'PAID',
-        razorpayPaymentId: payment.id,
-        razorpaySignatureVerified: true,
-        paidAt: nowIso,
-      });
-
-      const subSnap = await subRef.get();
-      if (subSnap.exists) {
-        const cur = subSnap.data() as Subscription;
-        await subRef.update({
-          planCode,
-          billingCycle: notes.billingCycle || 'MONTHLY',
-          status: 'ACTIVE',
-          entitlements: {
-            maxProjects: plan.entitlements.maxProjects,
-            maxUsers: plan.entitlements.maxUsers,
-            monthlyAiCredits: plan.entitlements.monthlyAiCredits,
-            monthlyWhatsappQuota: plan.entitlements.monthlyWhatsappQuota,
-          },
-          currentPeriodStart: nowIso,
-          currentPeriodEnd: periodEnd,
-          updatedAt: nowIso,
-          usageThisCycle: cur.usageThisCycle,
-        });
-      }
-    }
-  }
-
-  res.status(200).json({ ok: true });
 });

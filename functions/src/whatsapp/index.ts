@@ -12,6 +12,10 @@ import {
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import {
+  chargeWhatsappMessageWalletService,
+  refundFailedWhatsappChargeService,
+} from '../billing';
 
 export function verifyMetaWebhookSignature(
   rawBody: Buffer | string,
@@ -129,6 +133,9 @@ export async function sendOutboundWhatsappService(
     messageType: 'TEXT' | 'TEMPLATE' | 'DOCUMENT' | 'AI_DRAFT';
     content: string;
     templateName?: string;
+    messageCategory?: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE';
+    recipientMarket?: string;
+    requestId?: string;
     documentId?: string;
     quotationId?: string;
     aiGenerated?: boolean;
@@ -189,8 +196,28 @@ export async function sendOutboundWhatsappService(
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
+  const msgRef = db.collection('messages').doc();
+  const billingMessageKey = params.requestId || msgRef.id;
+  const effectiveCategory: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE' =
+    params.messageCategory ??
+    (params.messageType === 'TEMPLATE' ? 'UTILITY' : 'SERVICE');
+  const shouldChargePrepaidWallet =
+    Boolean(params.messageCategory) || Boolean(accessToken && phoneNumberId);
+
+  if (shouldChargePrepaidWallet && effectiveCategory !== 'SERVICE') {
+    await chargeWhatsappMessageWalletService(db, {
+      orgId: params.orgId,
+      wabaOrPhoneNumberId: phoneNumberId || 'WABA_CONFIGURED',
+      waMessageId: billingMessageKey,
+      recipientMarket: params.recipientMarket ?? org.countryCode ?? 'IN',
+      messageCategory: effectiveCategory,
+      deliveryEvidence: 'OUTBOUND_DISPATCH',
+      actorUid: actor.uid,
+    });
+  }
+
   let deliveryStatus: Message['deliveryStatus'] = 'QUEUED';
-  let waMessageId: string | undefined;
+  let waMessageId: string | undefined = params.requestId;
   let errorDetails: string | undefined;
 
   if (accessToken && phoneNumberId) {
@@ -228,7 +255,7 @@ export async function sendOutboundWhatsappService(
 
       if (res.ok) {
         const json = (await res.json()) as { messages?: Array<{ id: string }> };
-        waMessageId = json.messages?.[0]?.id;
+        waMessageId = json.messages?.[0]?.id ?? waMessageId;
         deliveryStatus = 'SENT';
       } else {
         deliveryStatus = 'FAILED';
@@ -243,7 +270,14 @@ export async function sendOutboundWhatsappService(
     errorDetails = 'WHATSAPP_ACCESS_TOKEN not configured; message recorded in queued state.';
   }
 
-  const msgRef = db.collection('messages').doc();
+  if (deliveryStatus === 'FAILED' && shouldChargePrepaidWallet && effectiveCategory !== 'SERVICE') {
+    await refundFailedWhatsappChargeService(db, {
+      orgId: params.orgId,
+      waMessageId: billingMessageKey,
+      reason: errorDetails || 'Outbound dispatch failed',
+    });
+  }
+
   const msg: Message = {
     id: msgRef.id,
     orgId: params.orgId,
@@ -362,6 +396,31 @@ export const whatsappWebhook = onRequest(async (req, res) => {
           if (mapped) {
             await msgSnap.docs[0]!.ref.update({ deliveryStatus: mapped });
           }
+        }
+
+        // Reconcile Meta pricing / failed delivery against WhatsApp Prepaid Wallet idempotently
+        const lowerStatus = String(st.status || '').toLowerCase();
+        if (lowerStatus === 'failed' && st.id) {
+          await refundFailedWhatsappChargeService(adminDb, {
+            orgId,
+            waMessageId: String(st.id),
+            reason: 'Meta webhook reported failed delivery',
+          });
+        } else if (st?.pricing?.billable && st.id) {
+          const rawCat = String(st.pricing.category || 'utility').toUpperCase();
+          const cat: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE' =
+            rawCat === 'MARKETING' ||
+            rawCat === 'UTILITY' ||
+            rawCat === 'AUTHENTICATION'
+              ? rawCat
+              : 'SERVICE';
+          await chargeWhatsappMessageWalletService(adminDb, {
+            orgId,
+            wabaOrPhoneNumberId: String(phoneNumberId),
+            waMessageId: String(st.id),
+            messageCategory: cat,
+            deliveryEvidence: `META_WEBHOOK_${lowerStatus.toUpperCase()}`,
+          });
         }
       }
     }

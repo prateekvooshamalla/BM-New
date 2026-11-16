@@ -35,12 +35,12 @@ describe('Phase 1 — Foundation: Navigation, Config, Orgs, Staff Invitations & 
     ]);
   });
 
-  it('defines all 13 enterprise roles and SaaS subscription tiers', () => {
+  it('defines all 13 enterprise roles and strictly 2 paid Builder SaaS packages', () => {
     expect(ROLES).toHaveLength(13);
-    expect(DEFAULT_SAAS_PLANS.STARTER.monthlyPriceInr).toBe(2999);
-    expect(DEFAULT_SAAS_PLANS.GROWTH.monthlyPriceInr).toBe(9999);
-    expect(DEFAULT_SAAS_PLANS.BUILDER_PRO.monthlyPriceInr).toBe(24999);
-    expect(DEFAULT_SAAS_PLANS.ENTERPRISE.isCustomPricing).toBe(true);
+    expect(Object.keys(DEFAULT_SAAS_PLANS)).toEqual(['SINGLE_PROJECT', 'MULTI_PROJECT']);
+    expect(DEFAULT_SAAS_PLANS.SINGLE_PROJECT.monthlyPriceInr).toBe(5999);
+    expect(DEFAULT_SAAS_PLANS.MULTI_PROJECT.perProjectMonthlyInr).toBe(4999);
+    expect(DEFAULT_SAAS_PLANS.MULTI_PROJECT.minProjects).toBe(2);
     expect(BRAND_CONFIG.initialSuperAdminEmail).toBe('prateek.parts@gmail.com');
   });
 
@@ -71,7 +71,7 @@ describe('Phase 1 — Foundation: Navigation, Config, Orgs, Staff Invitations & 
     expect(res.organization.leadProtectionDays).toBe(45);
     expect(res.membership.role).toBe('BUILDER_ADMIN');
     expect(res.membership.mfaRequired).toBe(true);
-    expect(res.subscription.planCode).toBe('STARTER');
+    expect(res.subscription.planCode).toBe('SINGLE_PROJECT');
 
     const auditSnap = await db
       .collection('audit_events')

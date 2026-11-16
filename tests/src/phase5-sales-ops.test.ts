@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createOrganizationService } from '../../functions/src/organizations';
+import { superAdminAdjustWalletService } from '../../functions/src/billing';
 import { createProjectService } from '../../functions/src/projects';
 import { ingestLeadService } from '../../functions/src/leads';
 import {
@@ -200,6 +201,18 @@ describe('Phase 5 — Sales Operations: CRM Dedup, Partner Lead Protection, Visi
       legalName: 'Aura Estates Pvt Ltd',
       headquartersCity: 'Mumbai',
     });
+
+    await superAdminAdjustWalletService(
+      db,
+      { uid: 'uid-super', email: 'prateek.parts@gmail.com', isSuperAdmin: true, mfaVerified: true },
+      {
+        orgId: organization.id,
+        walletType: 'WHATSAPP',
+        creditDeltaPaise: 50000,
+        requestId: 'req_wa_phase5_seed',
+        reason: 'Prepaid WhatsApp test balance',
+      }
+    );
 
     // Conversation with expired (>24h ago) customer message blocks free-form TEXT, allows TEMPLATE
     const oldTs = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();

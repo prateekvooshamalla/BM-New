@@ -92,12 +92,11 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
 
     await superAdminUpdateTenantService(db, SUPER_ADMIN, {
       orgId: organization.id,
-      planCode: 'ENTERPRISE',
-      customMaxProjects: -1,
-      customMaxUsers: -1,
-      customAiCredits: 50000,
-      customWhatsappQuota: 10000,
-      reason: 'Provision Enterprise quota for AI testing',
+      planCode: 'MULTI_PROJECT',
+      subscribedProjectCapacity: 10,
+      aiBalanceCreditPaise: 500000,
+      whatsappBalanceCreditPaise: 100000,
+      reason: 'Provision Multi-Project slots & AI wallet for testing',
     });
 
     const project1 = await createProjectService(db, BUILDER_A_ADMIN, 'BUILDER_ADMIN', {
@@ -338,12 +337,11 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
     });
     await superAdminUpdateTenantService(db, SUPER_ADMIN, {
       orgId: organization.id,
-      planCode: 'ENTERPRISE',
-      customMaxProjects: -1,
-      customMaxUsers: -1,
-      customAiCredits: 50000,
-      customWhatsappQuota: 10000,
-      reason: 'Enterprise AI testing',
+      planCode: 'MULTI_PROJECT',
+      subscribedProjectCapacity: 10,
+      aiBalanceCreditPaise: 500000,
+      whatsappBalanceCreditPaise: 100000,
+      reason: 'Multi-Project AI extraction testing',
     });
 
     const project = await createProjectService(db, BUILDER_A_ADMIN, 'BUILDER_ADMIN', {
@@ -393,7 +391,7 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
     );
     expect(sanitized).toContain('[REDACTED_UNTRUSTED_DIRECTIVE]');
 
-    // Scenario 9: Multi-page (5-page) PDF inspection & automatic model escalation to `gpt-6-astra`
+    // Scenario 9: Multi-page (5-page) PDF inspection & automatic model escalation to `o4-mini`
     const fivePagePdf = await buildSamplePdfBytes([
       'Page 1: Master Index - Tower Zenith',
       'Page 2: Stilt & Lobby Plan',
@@ -409,10 +407,9 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
       models: {
         list: async () => ({
           data: [
-            { id: 'gpt-6.1-sol' },
-            { id: 'gpt-6.1-terra' },
-            { id: 'gpt-6-astra' },
-            { id: 'gpt-6-luna' },
+            { id: 'gpt-4.1' },
+            { id: 'o4-mini' },
+            { id: 'gpt-4.1-mini' },
           ],
         }),
       },
@@ -474,10 +471,9 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
     // Validate OpenAI account models helper
     const modelCheck = await validateOpenAiAccountModels(mockVisionClient);
     expect(modelCheck.apiKeyPresent).toBe(true);
-    expect(modelCheck.verifiedModels['gpt-6.1-sol']).toBe(true);
-    expect(modelCheck.verifiedModels['gpt-6.1-terra']).toBe(true);
-    expect(modelCheck.verifiedModels['gpt-6-astra']).toBe(true);
-    expect(modelCheck.verifiedModels['gpt-6-luna']).toBe(true);
+    expect(modelCheck.verifiedModels['gpt-4.1']).toBe(true);
+    expect(modelCheck.verifiedModels['o4-mini']).toBe(true);
+    expect(modelCheck.verifiedModels['gpt-4.1-mini']).toBe(true);
 
     // Scenario 10 & 11: Extract typical floor template with provenance, and DO NOT extrapolate unbounded floor range!
     const extractionRes = await analyzeFloorPlanDocumentsService(
@@ -501,8 +497,8 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
       mockVisionClient
     );
 
-    // > 4 pages escalated to complexEscalation model (`gpt-6-astra`)
-    expect(modelsCalled).toContain('gpt-6-astra');
+    // > 4 pages escalated to complexEscalation model (`o4-mini`)
+    expect(modelsCalled).toContain('o4-mini');
     expect(extractionRes.draft.extractedEvidence.length).toBeGreaterThan(0);
     expect(extractionRes.draft.extractedEvidence[0]?.sourcePage).toBeGreaterThanOrEqual(1);
 
@@ -847,6 +843,13 @@ describe('Internal AI Assistant, Conversational Inventory Wizards & PDF Floor-Pl
       name: 'Builder Alpha Realty',
       legalName: 'Builder Alpha Realty Ltd',
       headquartersCity: 'Bengaluru',
+    });
+    await superAdminUpdateTenantService(db, SUPER_ADMIN, {
+      orgId: orgA.id,
+      planCode: 'MULTI_PROJECT',
+      subscribedProjectCapacity: 5,
+      aiBalanceCreditPaise: 500000,
+      reason: 'Provision Multi-Project slots for Builder Alpha isolation test',
     });
     const { organization: orgB } = await createOrganizationService(db, BUILDER_B_ADMIN, {
       name: 'Builder Beta Estates',

@@ -7,7 +7,16 @@ service firebase.storage {
     }
 
     function isSuperAdmin() {
-      return isSignedIn() && request.auth.token.platformRole == 'PLATFORM_SUPER_ADMIN';
+      return isSignedIn()
+        && request.auth.token.get('platformRole', '') == 'PLATFORM_SUPER_ADMIN';
+    }
+
+    function orgDoc(orgId) {
+      return firestore.get(/databases/(default)/documents/organizations/$(orgId));
+    }
+
+    function isOrgActive(orgId) {
+      return orgDoc(orgId).data != null && orgDoc(orgId).data.status == 'ACTIVE';
     }
 
     function memberDoc(orgId) {
@@ -18,6 +27,7 @@ service firebase.storage {
       return isSuperAdmin()
         || (
           isSignedIn()
+          && isOrgActive(orgId)
           && memberDoc(orgId).data != null
           && memberDoc(orgId).data.status == 'ACTIVE'
           && perm in memberDoc(orgId).data.permissions
@@ -49,6 +59,11 @@ service firebase.storage {
       allow write: if hasOrgStoragePermission(orgId, 'documents:upload')
         && isAllowedContentType()
         && isWithinSizeLimit();
+    }
+
+    // Default deny all other paths
+    match /{allOtherPaths=**} {
+      allow read, write: if false;
     }
   }
 }

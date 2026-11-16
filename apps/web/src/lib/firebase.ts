@@ -1,4 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import { getAuth, connectAuthEmulator, type Auth } from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator, type Firestore } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator, httpsCallable, type Functions } from 'firebase/functions';
@@ -27,6 +28,25 @@ if (getApps().length === 0) {
 }
 
 export const firebaseApp: FirebaseApp = appInstance;
+
+// Enable Firebase App Check automatically in browser when reCAPTCHA v3 site key is configured
+if (
+  typeof window !== 'undefined' &&
+  import.meta.env.VITE_FIREBASE_APP_CHECK_SITE_KEY &&
+  !isEmulatorMode
+) {
+  try {
+    initializeAppCheck(firebaseApp, {
+      provider: new ReCaptchaV3Provider(
+        String(import.meta.env.VITE_FIREBASE_APP_CHECK_SITE_KEY)
+      ),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } catch {
+    // Prevent duplicate App Check init in HMR
+  }
+}
+
 export const auth: Auth = getAuth(firebaseApp);
 export const db: Firestore = getFirestore(firebaseApp);
 export const functions: Functions = getFunctions(firebaseApp);

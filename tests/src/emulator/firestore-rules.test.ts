@@ -15,12 +15,16 @@ describe('Firebase Emulator — Multi-Tenant & AI Assistant Firestore Security R
     const rulesPath = path.resolve(__dirname, '../../../firebase/firestore.rules');
     const rules = fs.readFileSync(rulesPath, 'utf8');
 
+    const [emuHost, emuPort] = (
+      process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080'
+    ).split(':');
+
     testEnv = await initializeTestEnvironment({
       projectId: 'bharat-makaan-rules-test',
       firestore: {
         rules,
-        host: '127.0.0.1',
-        port: 8080,
+        host: emuHost || '127.0.0.1',
+        port: Number(emuPort || 8080),
       },
     });
 
@@ -149,6 +153,80 @@ describe('Firebase Emulator — Multi-Tenant & AI Assistant Firestore Security R
       await db.collection('_integration_secrets').doc('sec_1').set({
         apiKey: 'TOP_SECRET',
       });
+
+      // Billing, Wallets, Partner Org & Customer Saved Properties
+      await db.collection('organization_members').doc('orgA_billingAdminA').set({
+        id: 'orgA_billingAdminA',
+        orgId: 'orgA',
+        uid: 'billingAdminA',
+        role: 'BUILDER_ADMIN',
+        status: 'ACTIVE',
+        permissions: ['billing:view', 'partners:view', 'dashboard:view'],
+        assignedProjectIds: [],
+      });
+
+      await db.collection('organization_members').doc('orgB_userB').set({
+        id: 'orgB_userB',
+        orgId: 'orgB',
+        uid: 'userB',
+        role: 'BUILDER_ADMIN',
+        status: 'ACTIVE',
+        permissions: ['billing:view', 'partners:view', 'dashboard:view'],
+        assignedProjectIds: [],
+      });
+
+      await db.collection('partner_organizations').doc('partnerOrg1').set({
+        id: 'partnerOrg1',
+        companyName: 'Verified Agency 1',
+        status: 'ACTIVE',
+        authorizedOrgIds: ['orgA'],
+      });
+
+      await db.collection('partner_members').doc('partnerOrg1_partnerUser1').set({
+        id: 'partnerOrg1_partnerUser1',
+        partnerOrgId: 'partnerOrg1',
+        uid: 'partnerUser1',
+        status: 'ACTIVE',
+      });
+
+      await db.collection('entitlements').doc('orgA').set({
+        id: 'orgA',
+        orgId: 'orgA',
+        packageCode: 'SINGLE_PROJECT',
+        subscribedProjectCapacity: 1,
+        aiBalancePaise: 50000,
+        whatsappBalancePaise: 25000,
+      });
+
+      await db.collection('payments').doc('pay_orgA_1').set({
+        id: 'pay_orgA_1',
+        orgId: 'orgA',
+        amountPaise: 707900,
+        status: 'CAPTURED',
+      });
+
+      await db.collection('usage_ledger').doc('led_orgA_1').set({
+        id: 'led_orgA_1',
+        orgId: 'orgA',
+        walletType: 'AI',
+        entryType: 'USAGE_DEBIT',
+        amountPaise: 25,
+      });
+
+      await db.collection('credit_topups').doc('topup_orgA_1').set({
+        id: 'topup_orgA_1',
+        orgId: 'orgA',
+        walletType: 'AI',
+        status: 'PAID',
+      });
+
+      await db.collection('customer_saved_properties').doc('customer1_unit1').set({
+        id: 'customer1_unit1',
+        uid: 'customer1',
+        unitId: 'unit1',
+        projectId: 'projB_public',
+        orgId: 'orgB',
+      });
     });
   });
 
@@ -212,6 +290,60 @@ describe('Firebase Emulator — Multi-Tenant & AI Assistant Firestore Security R
       superDb.collection('units').doc('tampered_unit').set({
         orgId: 'orgA',
         status: 'BOOKED',
+      })
+    );
+  });
+
+  it('isolates partner_organizations (SEC-01 fix), billing entitlements/ledgers/payments, and customer_saved_properties with zero client write elevation', async () => {
+    const billingAdminADb = testEnv.authenticatedContext('billingAdminA').firestore();
+    const userBDb = testEnv.authenticatedContext('userB').firestore();
+    const partner1Db = testEnv.authenticatedContext('partnerUser1').firestore();
+    const customer1Db = testEnv.authenticatedContext('customer1').firestore();
+    const customer2Db = testEnv.authenticatedContext('customer2').firestore();
+
+    // SEC-01 verification: Partner member and authorized Org A admin can read `partnerOrg1`, while Customer & Org B admin are blocked!
+    await assertSucceeds(partner1Db.collection('partner_organizations').doc('partnerOrg1').get());
+    await assertSucceeds(
+      billingAdminADb.collection('partner_organizations').doc('partnerOrg1').get()
+    );
+    await assertFails(customer1Db.collection('partner_organizations').doc('partnerOrg1').get());
+    await assertFails(userBDb.collection('partner_organizations').doc('partnerOrg1').get());
+
+    // Billing & Wallet isolation + server-only writes
+    await assertSucceeds(billingAdminADb.collection('entitlements').doc('orgA').get());
+    await assertSucceeds(billingAdminADb.collection('payments').doc('pay_orgA_1').get());
+    await assertSucceeds(billingAdminADb.collection('usage_ledger').doc('led_orgA_1').get());
+    await assertSucceeds(billingAdminADb.collection('credit_topups').doc('topup_orgA_1').get());
+
+    await assertFails(userBDb.collection('entitlements').doc('orgA').get());
+    await assertFails(customer1Db.collection('usage_ledger').doc('led_orgA_1').get());
+
+    // Builder Admin CANNOT self-modify entitlements, project capacity, or wallet balance from client!
+    await assertFails(
+      billingAdminADb.collection('entitlements').doc('orgA').update({
+        subscribedProjectCapacity: 999,
+        aiBalancePaise: 99999900,
+      })
+    );
+    await assertFails(
+      billingAdminADb.collection('usage_ledger').doc('forged_credit').set({
+        orgId: 'orgA',
+        entryType: 'TOPUP_CREDIT',
+        amountPaise: 500000,
+      })
+    );
+
+    // Customer saved properties: customer1 can read own bookmark, customer2 cannot, and direct client writes are blocked
+    await assertSucceeds(
+      customer1Db.collection('customer_saved_properties').doc('customer1_unit1').get()
+    );
+    await assertFails(
+      customer2Db.collection('customer_saved_properties').doc('customer1_unit1').get()
+    );
+    await assertFails(
+      customer1Db.collection('customer_saved_properties').doc('forged_save').set({
+        uid: 'customer1',
+        unitId: 'secret_unit',
       })
     );
   });

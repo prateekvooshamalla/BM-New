@@ -5,6 +5,7 @@
 import type {
   AreaUnitCode,
   CurrencyCode,
+  OnboardingServiceCode,
   ProjectStructureTemplateKey,
   SaasPlanCode,
 } from '@bharat-makaan/config';
@@ -135,12 +136,16 @@ export interface ProjectStats {
   pendingTasksCount: number;
 }
 
+export type ProjectLifecycleStatus = 'ACTIVE' | 'ARCHIVED_READ_ONLY';
+
 export interface Project {
   id: string;
   orgId: string;
   builderName: string;
   name: string;
+  slug?: string;
   code: string;
+  lifecycleStatus?: ProjectLifecycleStatus;
   countryCode?: string;
   stateOrRegion?: string;
   city: string;
@@ -1237,17 +1242,35 @@ export interface IntegrationConfig {
   updatedAt: ISODateString;
 }
 
-// 32. subscriptions & 33. invoices
+// 32. subscriptions, entitlements, subscription_events, invoices, payments, onboarding_orders, credit_topups, usage_ledger
+export type SubscriptionLifecycleStatus =
+  | 'PENDING_CHECKOUT'
+  | 'ACTIVE'
+  | 'PAST_DUE'
+  | 'GRACE_PERIOD'
+  | 'CANCELLED_AT_PERIOD_END'
+  | 'CANCELLED'
+  | 'SUSPENDED';
+
+export type WorkspaceAccessMode =
+  | 'PENDING_SUBSCRIPTION'
+  | 'FULL_ACCESS'
+  | 'GRACE_WARNING'
+  | 'READ_ONLY_SUSPENDED';
+
 export interface Subscription {
   id: string; // `${orgId}`
   orgId: string;
-  planCode: SaasPlanCode;
-  billingCycle: 'MONTHLY' | 'ANNUAL';
-  basePriceInr: number;
+  planCode: SaasPlanCode; // Strictly 'SINGLE_PROJECT' | 'MULTI_PROJECT'
+  billingCycle: 'MONTHLY';
+  subscribedProjectCapacity: number; // 1 for SINGLE_PROJECT; >= 2 for MULTI_PROJECT
+  basePriceInr: number; // Recurring monthly subtotal before tax
+  taxRatePct: number;
+  monthlyTotalInr: number;
   onboardingFeePaid: boolean;
-  status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'CANCELLED';
+  status: SubscriptionLifecycleStatus;
   entitlements: {
-    maxProjects: number;
+    maxProjects: number; // Matches subscribedProjectCapacity (-1 only if Super Admin override)
     maxUsers: number;
     monthlyAiCredits: number;
     monthlyWhatsappQuota: number;
@@ -1264,10 +1287,58 @@ export interface Subscription {
     extraAiCredits: number;
     extraWhatsappQuota: number;
   };
+  razorpayPlanId?: string;
   razorpaySubscriptionId?: string;
+  razorpayCustomerId?: string;
+  razorpayShortUrl?: string;
+  pendingPlanChange?: {
+    targetPlanCode: SaasPlanCode;
+    targetProjectCapacity: number;
+    razorpayReplacementSubscriptionId?: string;
+    retainedActiveProjectIds?: string[];
+    requestedAt: ISODateString;
+  } | null;
+  gracePeriodEndsAt?: ISODateString | null;
+  cancelAtPeriodEnd?: boolean;
+  cancelledAt?: ISODateString | null;
   currentPeriodStart: ISODateString;
   currentPeriodEnd: ISODateString;
   updatedAt: ISODateString;
+}
+
+export interface TenantEntitlements {
+  id: string; // `${orgId}`
+  orgId: string;
+  packageCode: SaasPlanCode;
+  workspaceAccessMode: WorkspaceAccessMode;
+  subscribedProjectCapacity: number; // Authoritative active-project limit
+  activeProjectsCount: number;
+  // Prepaid Wallets (Integer Paise: ₹1 = 100 Paise)
+  aiBalancePaise: number;
+  aiReservedPaise: number;
+  whatsappBalancePaise: number;
+  whatsappReservedPaise: number;
+  // Explicit Super Admin enterprise credit floor (0 = negative balances strictly forbidden)
+  aiOverdraftLimitPaise: number;
+  whatsappOverdraftLimitPaise: number;
+  lowBalanceThresholdPaise: number;
+  gracePeriodEndsAt?: ISODateString | null;
+  updatedAt: ISODateString;
+}
+
+export interface SubscriptionEvent {
+  id: string; // Razorpay event ID or deterministic idempotency hash
+  orgId: string;
+  provider: 'RAZORPAY' | 'INTERNAL';
+  eventType: string;
+  razorpaySubscriptionId?: string | null;
+  razorpayPaymentId?: string | null;
+  razorpayOrderId?: string | null;
+  signatureVerified: boolean;
+  processed: boolean;
+  processingSummary: string;
+  payloadSummary?: Record<string, unknown>;
+  receivedAt: ISODateString;
 }
 
 export interface SaasInvoice {
@@ -1275,17 +1346,138 @@ export interface SaasInvoice {
   orgId: string;
   invoiceNumber: string;
   subscriptionId: string;
-  billingReason: 'SUBSCRIPTION' | 'ONBOARDING' | 'ADDON' | 'RENEWAL';
+  billingReason:
+    | 'SUBSCRIPTION'
+    | 'CAPACITY_UPGRADE'
+    | 'ONBOARDING'
+    | 'WALLET_TOPUP'
+    | 'RENEWAL';
+  packageCode?: SaasPlanCode;
+  projectSlotsBilled?: number;
   subtotalInr: number;
+  taxRatePct?: number;
   gstInr: number;
   totalInr: number;
-  status: 'DRAFT' | 'ISSUED' | 'PAID' | 'VOID';
+  status: 'DRAFT' | 'ISSUED' | 'PAID' | 'FAILED' | 'VOID';
   razorpayOrderId?: string;
+  razorpaySubscriptionId?: string;
+  razorpayInvoiceId?: string;
   razorpayPaymentId?: string;
   razorpaySignatureVerified: boolean;
   issuedAt: ISODateString;
   paidAt?: ISODateString | null;
   pdfStoragePath?: string;
+}
+
+export interface SaasPayment {
+  id: string;
+  orgId: string;
+  invoiceId?: string | null;
+  subscriptionId?: string | null;
+  onboardingOrderId?: string | null;
+  topupOrderId?: string | null;
+  paymentPurpose: 'SUBSCRIPTION' | 'ONBOARDING' | 'AI_WALLET_TOPUP' | 'WHATSAPP_WALLET_TOPUP';
+  amountPaise: number;
+  currency: 'INR';
+  status: 'CREATED' | 'AUTHORIZED' | 'CAPTURED' | 'FAILED' | 'REFUNDED';
+  razorpayPaymentId?: string;
+  razorpayOrderId?: string;
+  razorpaySubscriptionId?: string;
+  signatureVerified: boolean;
+  failureReason?: string | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface OnboardingOrder {
+  id: string;
+  idempotencyKey: string;
+  orgId: string;
+  serviceCode: OnboardingServiceCode;
+  serviceName: string;
+  subtotalInr: number;
+  taxRatePct: number;
+  gstInr: number;
+  totalInr: number;
+  status: 'FREE_SELF_SERVICE' | 'QUOTE_REQUESTED' | 'PENDING_PAYMENT' | 'PAID' | 'FAILED';
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  invoiceId?: string | null;
+  requestedByUid: string;
+  notes?: string;
+  createdAt: ISODateString;
+  paidAt?: ISODateString | null;
+  updatedAt: ISODateString;
+}
+
+export type PrepaidWalletType = 'AI' | 'WHATSAPP';
+
+export interface CreditTopupOrder {
+  id: string;
+  idempotencyKey: string;
+  orgId: string;
+  walletType: PrepaidWalletType;
+  creditAmountInr: number; // Net wallet value credited upon payment (₹500, ₹2,000, ₹5,000, or custom)
+  creditAmountPaise: number;
+  taxRatePct: number;
+  gstInr: number;
+  totalPayableInr: number;
+  totalPayablePaise: number;
+  status: 'PENDING_PAYMENT' | 'PAID' | 'FAILED';
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  invoiceId?: string | null;
+  requestedByUid: string;
+  createdAt: ISODateString;
+  creditedAt?: ISODateString | null;
+  updatedAt: ISODateString;
+}
+
+export interface UsageLedgerEntry {
+  id: string; // Deterministic ID for idempotent deduplication
+  orgId: string;
+  walletType: PrepaidWalletType;
+  entryType:
+    | 'TOPUP_CREDIT'
+    | 'ADMIN_CREDIT_ADJUSTMENT'
+    | 'RESERVATION_HOLD'
+    | 'RESERVATION_RELEASE'
+    | 'USAGE_DEBIT'
+    | 'FAILED_DELIVERY_REFUND';
+  amountPaise: number; // Positive magnitude in Paise
+  balanceAfterPaise: number;
+  reservedAfterPaise: number;
+  requestId: string; // Idempotency key (AI requestId or WhatsApp waMessageId)
+  actorUid?: string | null;
+  // AI Billing Metadata
+  aiMetadata?: {
+    feature: AiFeatureTask;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    rateVersion: string;
+  };
+  // WhatsApp Billing Metadata
+  whatsappMetadata?: {
+    wabaOrPhoneNumberId: string;
+    waMessageId: string;
+    recipientMarket: string;
+    messageCategory: 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE';
+    deliveryEvidence: string;
+    rateVersion: string;
+    appliedRatePaise: number;
+  };
+  summary: string;
+  createdAt: ISODateString;
+}
+
+export interface CustomerSavedProperty {
+  id: string; // `${uid}_${unitId}`
+  uid: string;
+  unitId: string;
+  projectId: string;
+  orgId: string;
+  savedAt: ISODateString;
 }
 
 // 34. ai_usage_logs

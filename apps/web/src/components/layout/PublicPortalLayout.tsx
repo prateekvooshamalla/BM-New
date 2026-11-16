@@ -1,11 +1,28 @@
-import { Link, NavLink, Outlet } from 'react-router-dom';
-import { Scale } from 'lucide-react';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
+import { Bookmark, LogOut, Scale } from 'lucide-react';
 import { BRAND_CONFIG } from '@bharat-makaan/config';
+import { auth } from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
 import { Button } from '@/components/ui/button';
 
 export function PublicPortalLayout() {
-  const { uid, compareUnitIds } = useTenantStore();
+  const navigate = useNavigate();
+  const {
+    uid,
+    isSuperAdmin,
+    memberships,
+    partnerMemberships,
+    compareUnitIds,
+  } = useTenantStore();
+
+  const hasBuilderAccess = memberships.some((m) => m.status === 'ACTIVE');
+  const hasPartnerAccess = partnerMemberships.some((p) => p.status === 'ACTIVE');
+
+  const handleSignOut = async () => {
+    await signOut(auth);
+    navigate('/');
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
@@ -18,7 +35,7 @@ export function PublicPortalLayout() {
             <span className="text-base font-bold tracking-tight">{BRAND_CONFIG.name}</span>
           </Link>
 
-          <nav className="hidden items-center gap-6 text-sm font-medium md:flex">
+          <nav className="hidden items-center gap-5 text-sm font-medium md:flex">
             <NavLink to="/buy" className="text-muted-foreground hover:text-foreground">
               Buy
             </NavLink>
@@ -28,36 +45,78 @@ export function PublicPortalLayout() {
             <NavLink to="/projects" className="text-muted-foreground hover:text-foreground">
               Projects
             </NavLink>
-            <NavLink to="/compare" className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground">
+            <NavLink
+              to="/compare"
+              className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+            >
               <Scale className="h-3.5 w-3.5" />
               Compare {compareUnitIds.length > 0 && `(${compareUnitIds.length})`}
             </NavLink>
-            <NavLink to="/for-professionals" className="text-muted-foreground hover:text-foreground">
-              For Professionals
-            </NavLink>
+            {uid && (
+              <>
+                <NavLink
+                  to="/saved"
+                  className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                >
+                  <Bookmark className="h-3.5 w-3.5" />
+                  Saved
+                </NavLink>
+                <NavLink
+                  to="/my-enquiries"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  My Enquiries
+                </NavLink>
+                <NavLink
+                  to="/my-visits"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  My Visits
+                </NavLink>
+              </>
+            )}
             <NavLink to="/pricing" className="text-muted-foreground hover:text-foreground">
-              Pricing
-            </NavLink>
-            <NavLink to="/about" className="text-muted-foreground hover:text-foreground">
-              About
-            </NavLink>
-            <NavLink to="/contact" className="text-muted-foreground hover:text-foreground">
-              Contact
+              Builder Pricing
             </NavLink>
           </nav>
 
           <div className="flex items-center gap-2">
             {uid ? (
-              <Button size="sm" asChild>
-                <Link to="/app/dashboard">Enterprise Console</Link>
-              </Button>
+              <>
+                {isSuperAdmin ? (
+                  <Button size="sm" asChild>
+                    <Link to="/admin/dashboard">Super Admin</Link>
+                  </Button>
+                ) : hasBuilderAccess ? (
+                  <Button size="sm" asChild>
+                    <Link to="/builder/dashboard">Builder Workspace</Link>
+                  </Button>
+                ) : hasPartnerAccess ? (
+                  <Button size="sm" asChild>
+                    <Link to="/partner/dashboard">Partner Portal</Link>
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link to="/saved">My Shortlist</Link>
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Sign out"
+                  aria-label="Sign out"
+                  onClick={handleSignOut}
+                >
+                  <LogOut className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </>
             ) : (
               <>
                 <Button variant="ghost" size="sm" asChild>
-                  <Link to="/auth/login">Sign In</Link>
+                  <Link to="/login">Sign In</Link>
                 </Button>
                 <Button size="sm" asChild>
-                  <Link to="/auth/register">Manage with AI</Link>
+                  <Link to="/register?persona=builder">For Builders</Link>
                 </Button>
               </>
             )}
@@ -76,36 +135,36 @@ export function PublicPortalLayout() {
             <p className="leading-relaxed">{BRAND_CONFIG.promise}</p>
           </div>
           <div className="space-y-2">
-            <div className="font-semibold text-foreground">Property Discovery</div>
+            <div className="font-semibold text-foreground">Customer Property Portal</div>
             <ul className="space-y-1.5">
               <li><Link to="/buy" className="hover:underline">Buy Properties</Link></li>
               <li><Link to="/rent" className="hover:underline">Rent Properties</Link></li>
-              <li><Link to="/projects" className="hover:underline">Verified RERA Projects</Link></li>
-              <li><Link to="/compare" className="hover:underline">Compare Properties</Link></li>
-              <li><Link to="/book-visit" className="hover:underline">Book Site Visit</Link></li>
+              <li><Link to="/projects" className="hover:underline">Verified Projects</Link></li>
+              <li><Link to="/saved" className="hover:underline">Saved Properties</Link></li>
+              <li><Link to="/my-enquiries" className="hover:underline">My Enquiries &amp; Visits</Link></li>
             </ul>
           </div>
           <div className="space-y-2">
-            <div className="font-semibold text-foreground">Enterprise Platform</div>
+            <div className="font-semibold text-foreground">Builders &amp; Partners</div>
             <ul className="space-y-1.5">
-              <li><Link to="/for-professionals" className="hover:underline">For Builders & Agents</Link></li>
-              <li><Link to="/pricing" className="hover:underline">SaaS Plans & Pricing</Link></li>
-              <li><Link to="/partner/dashboard" className="hover:underline">Channel Partner Portal</Link></li>
-              <li><Link to="/app/dashboard" className="hover:underline">Builder Workspace</Link></li>
+              <li><Link to="/for-professionals" className="hover:underline">For Builders &amp; Agencies</Link></li>
+              <li><Link to="/pricing" className="hover:underline">Builder Packages (₹5,999 / ₹4,999)</Link></li>
+              <li><Link to="/register?persona=builder" className="hover:underline">Builder Onboarding</Link></li>
+              <li><Link to="/login?persona=partner" className="hover:underline">Channel Partner Sign In</Link></li>
             </ul>
           </div>
           <div className="space-y-2">
-            <div className="font-semibold text-foreground">Company & Support</div>
+            <div className="font-semibold text-foreground">Company &amp; Support</div>
             <ul className="space-y-1.5">
               <li><Link to="/about" className="hover:underline">About Us</Link></li>
               <li><Link to="/contact" className="hover:underline">Contact Support</Link></li>
-              <li><Link to="/auth/login" className="hover:underline">Sign In / Register</Link></li>
+              <li><Link to="/login" className="hover:underline">Customer Sign In</Link></li>
             </ul>
           </div>
         </div>
         <div className="bm-container mt-8 border-t border-border pt-6 flex flex-wrap justify-between gap-2">
           <span>© {new Date().getFullYear()} {BRAND_CONFIG.legalEntity}. All rights reserved.</span>
-          <span>RERA-Compliant Multi-Builder Enterprise Cloud</span>
+          <span>Multi-Tenant Enterprise Real Estate SaaS</span>
         </div>
       </footer>
     </div>

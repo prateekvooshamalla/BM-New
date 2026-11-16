@@ -15,12 +15,14 @@ import type {
   PartnerMember,
   PartnerOrganization,
   Project,
+  TenantEntitlements,
 } from '@bharat-makaan/shared';
 import { auth, callBackendFunction, db, isEmulatorMode, isFirebaseConfigured } from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setAuthContext = useTenantStore((s) => s.setAuthContext);
+  const setActiveEntitlements = useTenantStore((s) => s.setActiveEntitlements);
   const setOrganizationsAndMemberships = useTenantStore((s) => s.setOrganizationsAndMemberships);
   const setProjects = useTenantStore((s) => s.setProjects);
   const setPartnerContext = useTenantStore((s) => s.setPartnerContext);
@@ -56,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAuthContext({
           uid: user.uid,
           email: user.email,
+          emailVerified: user.emailVerified,
           displayName: user.displayName,
           isSuperAdmin,
           mfaEnrolledCount: mfaCount,
@@ -67,10 +70,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const synced = await callBackendFunction<
             Record<string, never>,
             {
+              emailVerified?: boolean;
+              pendingUnverifiedInvitationsCount?: number;
               orgMemberships: OrganizationMember[];
               partnerMemberships: PartnerMember[];
             }
           >('syncMySessionMemberships', {});
+
+          setAuthContext({
+            uid: user.uid,
+            email: user.email,
+            emailVerified: synced.emailVerified ?? user.emailVerified,
+            displayName: user.displayName,
+            isSuperAdmin,
+            mfaEnrolledCount: mfaCount,
+            pendingUnverifiedInvitationsCount:
+              synced.pendingUnverifiedInvitationsCount ?? 0,
+            isAuthLoading: false,
+          });
 
           const activeMemberships = synced.orgMemberships.filter((m) => m.status === 'ACTIVE');
           const orgDocs = await Promise.all(
@@ -165,6 +182,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => unsub();
   }, [activeMember, activeOrgId, isSuperAdmin, setProjects]);
+
+  // Live entitlements & prepaid wallets subscription for active organization
+  React.useEffect(() => {
+    if (!activeOrgId) {
+      setActiveEntitlements(null);
+      return;
+    }
+    const unsub = onSnapshot(
+      doc(db, 'entitlements', activeOrgId),
+      (snap) => {
+        setActiveEntitlements(snap.exists() ? (snap.data() as TenantEntitlements) : null);
+      },
+      () => setActiveEntitlements(null)
+    );
+    return () => unsub();
+  }, [activeOrgId, setActiveEntitlements]);
 
   return <>{children}</>;
 }

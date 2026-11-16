@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import {
   Building2,
@@ -79,6 +79,7 @@ const STATUS_OPTIONS: UnitStatus[] = [
 
 export function ProjectsAndInventoryPage() {
   const navigate = useNavigate();
+  const { id: routeProjectId } = useParams<{ id?: string }>();
   const {
     activeOrgId,
     activeOrganization,
@@ -89,6 +90,14 @@ export function ProjectsAndInventoryPage() {
     setSelectedContextEntity,
     setAiDrawerOpen,
   } = useTenantStore();
+
+  React.useEffect(() => {
+    if (routeProjectId && routeProjectId !== activeProjectId) {
+      if (projects.some((p) => p.id === routeProjectId)) {
+        selectProject(routeProjectId, 'SINGLE_PROJECT');
+      }
+    }
+  }, [routeProjectId, activeProjectId, projects, selectProject]);
 
   const [phases, setPhases] = React.useState<ProjectPhase[]>([]);
   const [towers, setTowers] = React.useState<Tower[]>([]);

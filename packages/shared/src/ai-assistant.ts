@@ -13,10 +13,10 @@ import type {
 } from './entities';
 
 export const DEFAULT_OPENAI_MODELS = {
-  orchestrator: 'gpt-6.1-sol',
-  visionFloorPlan: 'gpt-6.1-terra',
-  complexEscalation: 'gpt-6-astra',
-  fastClassifier: 'gpt-6-luna',
+  orchestrator: 'gpt-4.1',
+  visionFloorPlan: 'gpt-4.1',
+  complexEscalation: 'o4-mini',
+  fastClassifier: 'gpt-4.1-mini',
 } as const;
 
 export type AiWizardKind =

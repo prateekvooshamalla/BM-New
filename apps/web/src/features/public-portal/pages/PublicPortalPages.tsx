@@ -6,13 +6,20 @@ import {
   CalendarClock,
   CheckCircle2,
   Compass,
+  Heart,
   MapPin,
   Scale,
   Search,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { BRAND_CONFIG, DEFAULT_SAAS_PLANS } from '@bharat-makaan/config';
+import {
+  BRAND_CONFIG,
+  DEFAULT_SAAS_PLANS,
+  OPTIONAL_ONBOARDING_SERVICES,
+  WALLET_TOPUP_PRESETS_INR,
+  calculateBuilderSubscriptionMonthlyInr,
+} from '@bharat-makaan/config';
 import {
   formatAreaSqft,
   formatInr,
@@ -429,25 +436,52 @@ export function PublicProjectsDirectoryPage() {
 
 // 5. PROJECT DETAILS
 export function PublicProjectDetailsPage() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId, slug } = useParams<{ projectId?: string; slug?: string }>();
+  const lookupKey = projectId || slug || '';
   const [project, setProject] = React.useState<Project | null>(null);
   const [units, setUnits] = React.useState<Unit[]>([]);
 
   React.useEffect(() => {
-    if (!projectId) return;
-    getDoc(doc(db, 'projects', projectId)).then((s) => {
-      if (s.exists() && s.data()?.isPublicPublished) {
-        setProject(s.data() as Project);
+    if (!lookupKey) return;
+    let active = true;
+    const load = async () => {
+      let resolvedProject: Project | null = null;
+      const directSnap = await getDoc(doc(db, 'projects', lookupKey));
+      if (directSnap.exists() && directSnap.data()?.isPublicPublished) {
+        resolvedProject = directSnap.data() as Project;
+      } else {
+        const slugSnap = await getDocs(
+          query(
+            collection(db, 'projects'),
+            where('slug', '==', lookupKey),
+            where('isPublicPublished', '==', true)
+          )
+        );
+        if (!slugSnap.empty) {
+          resolvedProject = slugSnap.docs[0]!.data() as Project;
+        }
       }
-    });
-    getDocs(
-      query(
-        collection(db, 'units'),
-        where('projectId', '==', projectId),
-        where('isPublicPublished', '==', true)
-      )
-    ).then((s) => setUnits(s.docs.map((d) => d.data() as Unit)));
-  }, [projectId]);
+
+      if (!active) return;
+      setProject(resolvedProject);
+      if (resolvedProject) {
+        const unitsSnap = await getDocs(
+          query(
+            collection(db, 'units'),
+            where('projectId', '==', resolvedProject.id),
+            where('isPublicPublished', '==', true)
+          )
+        );
+        if (active) setUnits(unitsSnap.docs.map((d) => d.data() as Unit));
+      } else {
+        setUnits([]);
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [lookupKey]);
 
   if (!project) {
     return (
@@ -465,7 +499,7 @@ export function PublicProjectDetailsPage() {
       <SeoHead
         title={`${project.name} by ${project.builderName} in ${project.city}`}
         description={`${project.configurations.join(', ')} at ${project.locality}, ${project.city}. RERA: ${project.reraNumber}`}
-        canonicalPath={`/projects/${project.id}`}
+        canonicalPath={`/project/${project.slug || project.id}`}
       />
       <Card>
         <CardHeader>
@@ -518,7 +552,7 @@ export function PublicProjectDetailsPage() {
               <div>{formatAreaSqft(u.saleableAreaSqft)} • {u.facing} Facing</div>
               <div className="font-bold text-primary text-base">{formatInr(u.calculatedTotalPrice)}</div>
               <Button size="sm" variant="outline" asChild className="w-full">
-                <Link to={`/properties/${u.id}`}>Inspect Unit</Link>
+                <Link to={`/property/${u.id}`}>Inspect Unit</Link>
               </Button>
             </CardContent>
           </Card>
@@ -530,13 +564,18 @@ export function PublicProjectDetailsPage() {
 
 // 6. PROPERTY DETAILS
 export function PublicPropertyDetailsPage() {
-  const { unitId } = useParams<{ unitId: string }>();
+  const navigate = useNavigate();
+  const { unitId, slug } = useParams<{ unitId?: string; slug?: string }>();
+  const lookupKey = unitId || slug || '';
+  const { uid } = useTenantStore();
   const [unit, setUnit] = React.useState<Unit | null>(null);
   const [project, setProject] = React.useState<Project | null>(null);
+  const [savedStatus, setSavedStatus] = React.useState<'IDLE' | 'SAVED' | 'REMOVED'>('IDLE');
+  const [savingBusy, setSavingBusy] = React.useState(false);
 
   React.useEffect(() => {
-    if (!unitId) return;
-    getDoc(doc(db, 'units', unitId)).then(async (s) => {
+    if (!lookupKey) return;
+    getDoc(doc(db, 'units', lookupKey)).then(async (s) => {
       if (s.exists() && s.data()?.isPublicPublished) {
         const u = s.data() as Unit;
         setUnit(u);
@@ -544,7 +583,29 @@ export function PublicPropertyDetailsPage() {
         if (pSnap.exists()) setProject(pSnap.data() as Project);
       }
     });
-  }, [unitId]);
+  }, [lookupKey]);
+
+  const handleToggleSave = async () => {
+    if (!unit) return;
+    if (!uid) {
+      navigate(`/login?redirect=${encodeURIComponent(`/property/${unit.id}`)}`);
+      return;
+    }
+    setSavingBusy(true);
+    try {
+      const res = await callBackendFunction<
+        { unitId: string; projectId: string; orgId: string },
+        { saved: boolean }
+      >('toggleCustomerSavedProperty', {
+        unitId: unit.id,
+        projectId: unit.projectId,
+        orgId: unit.orgId,
+      });
+      setSavedStatus(res.saved ? 'SAVED' : 'REMOVED');
+    } finally {
+      setSavingBusy(false);
+    }
+  };
 
   if (!unit) {
     return (
@@ -559,7 +620,7 @@ export function PublicPropertyDetailsPage() {
       <SeoHead
         title={`Unit ${unit.unitNumber} (${unit.bhk}) — ${project?.name ?? 'Property'}`}
         description={`${formatAreaSqft(unit.saleableAreaSqft)} ${unit.facing} facing ${unit.bhk}.`}
-        canonicalPath={`/properties/${unit.id}`}
+        canonicalPath={`/property/${unit.id}`}
       />
       <Card>
         <CardHeader>
@@ -601,7 +662,7 @@ export function PublicPropertyDetailsPage() {
             </div>
           </div>
 
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Button asChild>
               <Link to={`/book-visit?orgId=${unit.orgId}&projectId=${unit.projectId}&unitId=${unit.id}`}>
                 Schedule Site Visit
@@ -611,6 +672,19 @@ export function PublicPropertyDetailsPage() {
               <Link to={`/contact-builder/${unit.orgId}?projectId=${unit.projectId}&unitId=${unit.id}`}>
                 Request Official Cost Sheet
               </Link>
+            </Button>
+            <Button
+              type="button"
+              variant={savedStatus === 'SAVED' ? 'secondary' : 'outline'}
+              disabled={savingBusy}
+              onClick={handleToggleSave}
+            >
+              <Heart className="h-4 w-4" />
+              {savedStatus === 'SAVED'
+                ? 'Saved to My Properties'
+                : savedStatus === 'REMOVED'
+                  ? 'Save Property'
+                  : 'Save Property'}
             </Button>
           </div>
         </CardContent>
@@ -953,86 +1027,148 @@ export function PublicForProfessionalsPage() {
 
 // 11. SAAS PRICING PAGE
 export function PublicPricingPage() {
-  const [annual, setAnnual] = React.useState(false);
+  const [multiProjectSlots, setMultiProjectSlots] = React.useState(2);
+  const multiCalc = calculateBuilderSubscriptionMonthlyInr('MULTI_PROJECT', multiProjectSlots, 18);
 
   return (
-    <div className="bm-container py-14 space-y-8">
+    <div className="bm-container py-14 space-y-10">
       <SeoHead
         title="Enterprise Real Estate SaaS Pricing"
-        description="Starter, Growth, Builder Pro, and Enterprise subscription plans for real estate developers."
+        description="Single Project (INR 5,999/mo) and Multi-Project (INR 4,999/project/mo, min 2 projects) packages for builders."
         canonicalPath="/pricing"
       />
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold">Transparent Enterprise Pricing</h1>
-          <p className="text-sm text-muted-foreground">
-            Scale across projects, sales teams, channel partners, AI credits, and WhatsApp volume.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-card p-1">
-          <Button
-            size="sm"
-            variant={!annual ? 'default' : 'ghost'}
-            onClick={() => setAnnual(false)}
-          >
-            Monthly
-          </Button>
-          <Button
-            size="sm"
-            variant={annual ? 'default' : 'ghost'}
-            onClick={() => setAnnual(true)}
-          >
-            Annual (2 Months Free)
-          </Button>
+      <div className="max-w-3xl space-y-2">
+        <h1 className="text-3xl font-bold">Simple, Transparent Builder Packages</h1>
+        <p className="text-sm text-muted-foreground">
+          Strictly two paid monthly builder packages. Optional assisted onboarding is one-time and
+          never required, and AI + WhatsApp run on transparent prepaid usage wallets.
+        </p>
+      </div>
+
+      {/* Strictly Two Paid Builder Packages */}
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card className="flex flex-col justify-between">
+          <CardHeader>
+            <CardTitle>{DEFAULT_SAAS_PLANS.SINGLE_PROJECT.name}</CardTitle>
+            <div className="mt-2 text-3xl font-bold text-primary">
+              {formatInr(DEFAULT_SAAS_PLANS.SINGLE_PROJECT.monthlyPriceInr)}
+              <span className="text-sm font-normal text-muted-foreground"> / month + GST</span>
+            </div>
+            <CardDescription>{DEFAULT_SAAS_PLANS.SINGLE_PROJECT.tagline}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2.5 text-xs">
+            <div>
+              Active Project Capacity: <strong>1 Active Project (Hard Limit)</strong>
+            </div>
+            <div>
+              Builder Staff &amp; Role Permissions: <strong>Included</strong>
+            </div>
+            <div>
+              Inventory, Physical Parking, Cost Sheets &amp; Bookings: <strong>Included</strong>
+            </div>
+            <div>
+              Channel Partner Portal &amp; Lead Protection: <strong>Included</strong>
+            </div>
+            <div className="pt-4">
+              <Button className="w-full" size="sm" asChild>
+                <Link to="/register?persona=builder">Start Single Project Package</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="flex flex-col justify-between border-primary/50">
+          <CardHeader>
+            <CardTitle>{DEFAULT_SAAS_PLANS.MULTI_PROJECT.name}</CardTitle>
+            <div className="mt-2 text-3xl font-bold text-primary">
+              {formatInr(DEFAULT_SAAS_PLANS.MULTI_PROJECT.perProjectMonthlyInr)}
+              <span className="text-sm font-normal text-muted-foreground">
+                {' '}
+                / project / month + GST
+              </span>
+            </div>
+            <CardDescription>
+              Minimum 2 active projects ({formatInr(9998)} / month before GST). Scale project slots
+              anytime.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-xs">
+            <div className="rounded-lg border border-border bg-secondary/40 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="public-slots-calc" className="text-xs font-semibold">
+                  Subscribed Project Slots (Min 2)
+                </Label>
+                <Input
+                  id="public-slots-calc"
+                  type="number"
+                  min={2}
+                  max={250}
+                  className="h-8 w-24 text-right"
+                  value={multiProjectSlots}
+                  onChange={(e) => setMultiProjectSlots(Math.max(2, Number(e.target.value) || 2))}
+                />
+              </div>
+              <div className="flex items-center justify-between text-sm font-bold text-foreground">
+                <span>{multiCalc.subscribedProjectCapacity} Active Projects</span>
+                <span>{formatInr(multiCalc.monthlySubtotalInr)} / month + GST</span>
+              </div>
+            </div>
+            <div>
+              Consolidated Organization Analytics &amp; Cross-Project Staff Allocation:{' '}
+              <strong>Included</strong>
+            </div>
+            <div>
+              Multi-Builder Channel Partner Authorizations: <strong>Included</strong>
+            </div>
+            <div className="pt-2">
+              <Button className="w-full" size="sm" asChild>
+                <Link to="/register?persona=builder">Start Multi-Project Package</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Optional One-Time Assisted Onboarding */}
+      <div className="space-y-3">
+        <h2 className="text-xl font-bold">Optional One-Time Assisted Onboarding</h2>
+        <p className="text-xs text-muted-foreground">
+          Self-service onboarding is always ₹0. Assisted setup is optional and billed once only if
+          explicitly selected at checkout.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Object.values(OPTIONAL_ONBOARDING_SERVICES).map((svc) => (
+            <Card key={svc.code}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">{svc.name}</CardTitle>
+                <div className="text-lg font-bold text-primary">
+                  {svc.oneTimeFeeInr === null
+                    ? 'Custom Quote'
+                    : svc.oneTimeFeeInr === 0
+                      ? 'Free (₹0)'
+                      : `${formatInr(svc.oneTimeFeeInr)} one-time`}
+                </div>
+              </CardHeader>
+              <CardContent className="text-xs text-muted-foreground">{svc.description}</CardContent>
+            </Card>
+          ))}
         </div>
       </div>
 
-      <div className="grid gap-5 md:grid-cols-4">
-        {Object.values(DEFAULT_SAAS_PLANS).map((plan) => {
-          const price = annual ? plan.annualPriceInr : plan.monthlyPriceInr;
-          return (
-            <Card key={plan.code} className="flex flex-col justify-between">
-              <CardHeader>
-                <CardTitle>{plan.name}</CardTitle>
-                <div className="mt-2 text-2xl font-bold text-primary">
-                  {price ? `${formatInr(price)}${annual ? '/yr' : '/mo'}` : 'Custom'}
-                </div>
-                <CardDescription>{plan.tagline}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-xs">
-                <div>
-                  Projects:{' '}
-                  <strong>
-                    {plan.entitlements.maxProjects === -1
-                      ? 'Unlimited'
-                      : plan.entitlements.maxProjects}
-                  </strong>
-                </div>
-                <div>
-                  Employee Seats:{' '}
-                  <strong>
-                    {plan.entitlements.maxUsers === -1 ? 'Unlimited' : plan.entitlements.maxUsers}
-                  </strong>
-                </div>
-                <div>
-                  AI Credits: <strong>{plan.entitlements.monthlyAiCredits.toLocaleString('en-IN')}/mo</strong>
-                </div>
-                <div>
-                  WhatsApp Quota:{' '}
-                  <strong>{plan.entitlements.monthlyWhatsappQuota.toLocaleString('en-IN')}/mo</strong>
-                </div>
-                <div className="pt-3">
-                  <Button className="w-full" size="sm" asChild>
-                    <Link to={plan.isCustomPricing ? '/contact' : '/auth/register'}>
-                      {plan.isCustomPricing ? 'Contact Enterprise Sales' : 'Get Started'}
-                    </Link>
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      {/* Prepaid AI & WhatsApp Wallets */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            Prepaid AI Wallet &amp; WhatsApp Cloud Wallet
+          </CardTitle>
+          <CardDescription>
+            AI Assistant / Floor-Plan Extraction and Meta WhatsApp Cloud API messages are metered
+            against transparent prepaid wallets — never bundled as hidden overages. Top up presets:{' '}
+            {WALLET_TOPUP_PRESETS_INR.map((amt) => formatInr(amt)).join(', ')} or custom ≥ ₹100.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   createUserWithEmailAndPassword,
   getMultiFactorResolver,
   GoogleAuthProvider,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -14,7 +15,8 @@ import {
 } from 'firebase/auth';
 import { ShieldCheck } from 'lucide-react';
 import { BRAND_CONFIG } from '@bharat-makaan/config';
-import { auth } from '@/lib/firebase';
+import { auth, callBackendFunction } from '@/lib/firebase';
+import { resolveDefaultPostLoginRoute } from '@/components/auth/PersonaRouteGuards';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -32,6 +34,9 @@ export function AuthPage({
   defaultMode?: 'login' | 'register';
 }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const requestedPersona = searchParams.get('persona');
+  const redirectTarget = searchParams.get('redirect');
   const [mode, setMode] = React.useState<'login' | 'register' | 'reset'>(
     defaultMode
   );
@@ -76,6 +81,38 @@ export function AuthPage({
     }
   };
 
+  const routeAfterSignIn = async () => {
+    if (redirectTarget && redirectTarget.startsWith('/')) {
+      navigate(redirectTarget);
+      return;
+    }
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      navigate('/');
+      return;
+    }
+    try {
+      const tokenRes = await currentUser.getIdTokenResult();
+      const isSuperAdmin = tokenRes.claims.platformRole === 'PLATFORM_SUPER_ADMIN';
+      const synced = await callBackendFunction<
+        Record<string, never>,
+        { orgMemberships?: Array<{ status: string }>; partnerMemberships?: Array<{ status: string }> }
+      >('syncMySessionMemberships', {});
+      const hasBuilder = (synced.orgMemberships ?? []).some((m) => m.status === 'ACTIVE');
+      const hasPartner = (synced.partnerMemberships ?? []).some((p) => p.status === 'ACTIVE');
+      navigate(
+        resolveDefaultPostLoginRoute({
+          isSuperAdmin,
+          hasActiveBuilderMembership: hasBuilder,
+          hasActivePartnerMembership: hasPartner,
+          requestedPersona,
+        })
+      );
+    } catch {
+      navigate(requestedPersona === 'builder' ? '/builder/onboarding' : '/saved');
+    }
+  };
+
   const handleGoogleAuth = async () => {
     if (loading) return;
     setError(null);
@@ -85,7 +122,7 @@ export function AuthPage({
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, provider);
-      navigate('/app/dashboard');
+      await routeAfterSignIn();
     } catch (err: unknown) {
       handleAuthError(err);
     } finally {
@@ -113,10 +150,15 @@ export function AuthPage({
         if (fullName.trim()) {
           await updateProfile(cred.user, { displayName: fullName.trim() });
         }
-        navigate('/app/dashboard');
+        try {
+          await sendEmailVerification(cred.user);
+        } catch {
+          // Non-fatal in local emulator without SMTP configured
+        }
+        await routeAfterSignIn();
       } else {
         await signInWithEmailAndPassword(auth, email.trim(), password);
-        navigate('/app/dashboard');
+        await routeAfterSignIn();
       }
     } catch (err: unknown) {
       handleAuthError(err);
@@ -143,7 +185,7 @@ export function AuthPage({
         totpCode.trim()
       );
       await mfaResolver.resolveSignIn(assertion);
-      navigate('/app/dashboard');
+      await routeAfterSignIn();
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Invalid verification code.'

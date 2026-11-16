@@ -418,3 +418,88 @@ export function isPrivilegedMfaRole(role: RoleKey): boolean {
     role === 'FINANCE_MANAGER'
   );
 }
+
+export interface RouteAccessInput {
+  uid: string | null;
+  isSuperAdmin: boolean;
+  mfaEnrolledCount: number;
+  hasActiveBuilderMembership: boolean;
+  hasActivePartnerMembership: boolean;
+  targetPersona: 'CUSTOMER_PERSONAL' | 'BUILDER' | 'PARTNER' | 'SUPER_ADMIN';
+  isBuilderOnboardingRoute?: boolean;
+}
+
+export function evaluatePersonaRouteAccess(input: RouteAccessInput): {
+  allowed: boolean;
+  reason?: string;
+  redirectTo?: string;
+} {
+  if (!input.uid) {
+    return {
+      allowed: false,
+      reason: 'UNAUTHENTICATED',
+      redirectTo: `/login?persona=${input.targetPersona.toLowerCase()}`,
+    };
+  }
+
+  if (input.targetPersona === 'CUSTOMER_PERSONAL') {
+    return { allowed: true };
+  }
+
+  if (input.targetPersona === 'SUPER_ADMIN') {
+    if (!input.isSuperAdmin) {
+      return {
+        allowed: false,
+        reason: 'SUPER_ADMIN_REQUIRED',
+        redirectTo: '/',
+      };
+    }
+    if (input.mfaEnrolledCount === 0) {
+      return {
+        allowed: false,
+        reason: 'MFA_REQUIRED',
+      };
+    }
+    return { allowed: true };
+  }
+
+  if (input.targetPersona === 'BUILDER') {
+    if (input.isSuperAdmin || input.hasActiveBuilderMembership || input.isBuilderOnboardingRoute) {
+      return { allowed: true };
+    }
+    return {
+      allowed: false,
+      reason: 'BUILDER_MEMBERSHIP_REQUIRED',
+    };
+  }
+
+  if (input.targetPersona === 'PARTNER') {
+    if (input.isSuperAdmin || input.hasActivePartnerMembership) {
+      return { allowed: true };
+    }
+    return {
+      allowed: false,
+      reason: 'PARTNER_MEMBERSHIP_REQUIRED',
+    };
+  }
+
+  return { allowed: false, reason: 'DENIED' };
+}
+
+export function resolveDefaultPostLoginRoute(params: {
+  isSuperAdmin: boolean;
+  hasActiveBuilderMembership: boolean;
+  hasActivePartnerMembership: boolean;
+  requestedPersona?: string | null;
+}): string {
+  if (params.isSuperAdmin) return '/admin/dashboard';
+  if (params.requestedPersona === 'builder') {
+    return params.hasActiveBuilderMembership ? '/builder/dashboard' : '/builder/onboarding';
+  }
+  if (params.requestedPersona === 'partner') {
+    return '/partner/dashboard';
+  }
+  if (params.hasActiveBuilderMembership) return '/builder/dashboard';
+  if (params.hasActivePartnerMembership) return '/partner/dashboard';
+  return '/saved';
+}

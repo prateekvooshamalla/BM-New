@@ -399,145 +399,233 @@ export const DESIGN_TOKENS = {
   },
 } as const;
 
-export type SaasPlanCode = 'STARTER' | 'GROWTH' | 'BUILDER_PRO' | 'ENTERPRISE';
+export const BUILDER_PACKAGE_CODES = ['SINGLE_PROJECT', 'MULTI_PROJECT'] as const;
+export type SaasPlanCode = (typeof BUILDER_PACKAGE_CODES)[number];
 
 export interface SaasPlanDefinition {
   code: SaasPlanCode;
   name: string;
   tagline: string;
-  monthlyPriceInr: number | null; // null = Custom enterprise quote
-  annualPriceInr: number | null;
-  onboardingFeeInr: number;
-  isCustomPricing: boolean;
+  monthlyPriceInr: number; // Base recurring INR before applicable taxes (min 2 projects for MULTI_PROJECT)
+  perProjectMonthlyInr: number;
+  minProjects: number;
+  maxProjects: number | null; // 1 for SINGLE_PROJECT, null (bounded by paid subscribedProjectCapacity) for MULTI_PROJECT
+  defaultTaxPct: number;
+  features: string[];
   entitlements: {
-    maxProjects: number; // -1 for unlimited
-    maxUsers: number;
-    monthlyAiCredits: number;
-    monthlyWhatsappQuota: number;
+    maxProjects: number; // 1 for SINGLE_PROJECT, dynamic >=2 for MULTI_PROJECT
+    maxUsers: number; // -1 = unlimited role-based staff within organization
     customFormBuilder: boolean;
     channelPartnerPortal: boolean;
-    dedicatedSupport: boolean;
-  };
-  addonRatesInr: {
-    extraUserMonthly: number;
-    extraProjectMonthly: number;
-    aiCreditsPack1000: number;
-    whatsappConversationPack1000: number;
+    multiProjectPortfolioReports: boolean;
+    aiAssistantInterface: boolean;
+    whatsappIntegrationInterface: boolean;
   };
 }
 
-export const DEFAULT_SAAS_PLANS: Record<SaasPlanCode, SaasPlanDefinition> = {
-  STARTER: {
-    code: 'STARTER',
-    name: 'Starter',
-    tagline: 'For boutique builders and emerging single-project developments.',
-    monthlyPriceInr: 2999,
-    annualPriceInr: 29990,
-    onboardingFeeInr: 4999,
-    isCustomPricing: false,
+export const BUILDER_SUBSCRIPTION_PACKAGES: Record<SaasPlanCode, SaasPlanDefinition> = {
+  SINGLE_PROJECT: {
+    code: 'SINGLE_PROJECT',
+    name: 'Single Project Builder',
+    tagline: 'Complete enterprise real estate operating system for one active project.',
+    monthlyPriceInr: 5999,
+    perProjectMonthlyInr: 5999,
+    minProjects: 1,
+    maxProjects: 1,
+    defaultTaxPct: 18,
+    features: [
+      '1 active project (hard server-enforced limit)',
+      'Project configuration, towers, floors & units',
+      'Physical parking inventory & allocations',
+      'Dynamic pricing & cost sheet generator',
+      'Lead CRM, site visits & channel partners',
+      'Controlled documents & audit reports',
+      'Internal AI Assistant interface (prepaid AI Wallet)',
+      'Official WhatsApp Cloud interface (prepaid WhatsApp Wallet)',
+    ],
+    entitlements: {
+      maxProjects: 1,
+      maxUsers: -1,
+      customFormBuilder: true,
+      channelPartnerPortal: true,
+      multiProjectPortfolioReports: false,
+      aiAssistantInterface: true,
+      whatsappIntegrationInterface: true,
+    },
+  },
+  MULTI_PROJECT: {
+    code: 'MULTI_PROJECT',
+    name: 'Multi-Project Builder',
+    tagline: 'Scale across multiple developments at ₹4,999 per project/month (minimum 2 projects).',
+    monthlyPriceInr: 9998,
+    perProjectMonthlyInr: 4999,
+    minProjects: 2,
+    maxProjects: null,
+    defaultTaxPct: 18,
+    features: [
+      'Minimum 2 active project slots (₹9,998/month)',
+      '₹4,999/month per subscribed project slot (server-enforced capacity)',
+      'All Single Project modules included',
+      'Multi-project portfolio management & consolidated analytics',
+      'Flexible slot upgrades & non-destructive project archiving',
+      'Internal AI Assistant interface (prepaid AI Wallet)',
+      'Official WhatsApp Cloud interface (prepaid WhatsApp Wallet)',
+    ],
     entitlements: {
       maxProjects: 2,
-      maxUsers: 10,
-      monthlyAiCredits: 500,
-      monthlyWhatsappQuota: 1000,
-      customFormBuilder: true,
-      channelPartnerPortal: false,
-      dedicatedSupport: false,
-    },
-    addonRatesInr: {
-      extraUserMonthly: 299,
-      extraProjectMonthly: 1499,
-      aiCreditsPack1000: 999,
-      whatsappConversationPack1000: 799,
-    },
-  },
-  GROWTH: {
-    code: 'GROWTH',
-    name: 'Growth',
-    tagline: 'For growing developers managing multi-tower inventory and active CRM teams.',
-    monthlyPriceInr: 9999,
-    annualPriceInr: 99990,
-    onboardingFeeInr: 9999,
-    isCustomPricing: false,
-    entitlements: {
-      maxProjects: 8,
-      maxUsers: 35,
-      monthlyAiCredits: 2500,
-      monthlyWhatsappQuota: 5000,
-      customFormBuilder: true,
-      channelPartnerPortal: true,
-      dedicatedSupport: false,
-    },
-    addonRatesInr: {
-      extraUserMonthly: 249,
-      extraProjectMonthly: 1199,
-      aiCreditsPack1000: 899,
-      whatsappConversationPack1000: 699,
-    },
-  },
-  BUILDER_PRO: {
-    code: 'BUILDER_PRO',
-    name: 'Builder Pro',
-    tagline: 'Full-scale multi-city inventory, dynamic pricing, channel partners and collections.',
-    monthlyPriceInr: 24999,
-    annualPriceInr: 249990,
-    onboardingFeeInr: 19999,
-    isCustomPricing: false,
-    entitlements: {
-      maxProjects: 25,
-      maxUsers: 120,
-      monthlyAiCredits: 10000,
-      monthlyWhatsappQuota: 25000,
-      customFormBuilder: true,
-      channelPartnerPortal: true,
-      dedicatedSupport: true,
-    },
-    addonRatesInr: {
-      extraUserMonthly: 199,
-      extraProjectMonthly: 999,
-      aiCreditsPack1000: 799,
-      whatsappConversationPack1000: 599,
-    },
-  },
-  ENTERPRISE: {
-    code: 'ENTERPRISE',
-    name: 'Enterprise',
-    tagline: 'Tailored governance, unlimited scale, custom SLAs and dedicated onboarding.',
-    monthlyPriceInr: null,
-    annualPriceInr: null,
-    onboardingFeeInr: 49999,
-    isCustomPricing: true,
-    entitlements: {
-      maxProjects: -1,
       maxUsers: -1,
-      monthlyAiCredits: 50000,
-      monthlyWhatsappQuota: 100000,
       customFormBuilder: true,
       channelPartnerPortal: true,
-      dedicatedSupport: true,
-    },
-    addonRatesInr: {
-      extraUserMonthly: 149,
-      extraProjectMonthly: 0,
-      aiCreditsPack1000: 699,
-      whatsappConversationPack1000: 499,
+      multiProjectPortfolioReports: true,
+      aiAssistantInterface: true,
+      whatsappIntegrationInterface: true,
     },
   },
 };
 
+// Canonical alias maintained across web, mobile, and functions
+export const DEFAULT_SAAS_PLANS = BUILDER_SUBSCRIPTION_PACKAGES;
+
+/**
+ * Deterministic recurring subscription price formula:
+ * - SINGLE_PROJECT: ₹5,999/month, capacity = 1
+ * - MULTI_PROJECT: ₹4,999 × MAX(2, subscribedProjectCapacity)
+ */
+export function calculateBuilderSubscriptionMonthlyInr(
+  packageCode: SaasPlanCode,
+  requestedProjectCapacity = 1,
+  taxRatePct = 18
+): {
+  packageCode: SaasPlanCode;
+  subscribedProjectCapacity: number;
+  unitRateInr: number;
+  monthlySubtotalInr: number;
+  monthlyTaxInr: number;
+  monthlyTotalInr: number;
+} {
+  if (packageCode === 'SINGLE_PROJECT') {
+    const monthlySubtotalInr = 5999;
+    const monthlyTaxInr = Math.round((monthlySubtotalInr * taxRatePct) / 100);
+    return {
+      packageCode: 'SINGLE_PROJECT',
+      subscribedProjectCapacity: 1,
+      unitRateInr: 5999,
+      monthlySubtotalInr,
+      monthlyTaxInr,
+      monthlyTotalInr: monthlySubtotalInr + monthlyTaxInr,
+    };
+  }
+
+  const subscribedProjectCapacity = Math.max(2, Math.floor(requestedProjectCapacity || 2));
+  const unitRateInr = 4999;
+  const monthlySubtotalInr = unitRateInr * subscribedProjectCapacity;
+  const monthlyTaxInr = Math.round((monthlySubtotalInr * taxRatePct) / 100);
+  return {
+    packageCode: 'MULTI_PROJECT',
+    subscribedProjectCapacity,
+    unitRateInr,
+    monthlySubtotalInr,
+    monthlyTaxInr,
+    monthlyTotalInr: monthlySubtotalInr + monthlyTaxInr,
+  };
+}
+
+export const ONBOARDING_SERVICE_CODES = [
+  'SELF_SERVICE',
+  'ASSISTED_SINGLE_PROJECT',
+  'ASSISTED_TWO_PROJECTS',
+  'CUSTOM_ENTERPRISE_IMPORT',
+] as const;
+
+export type OnboardingServiceCode = (typeof ONBOARDING_SERVICE_CODES)[number];
+
+export interface OnboardingServiceDefinition {
+  code: OnboardingServiceCode;
+  name: string;
+  description: string;
+  oneTimeFeeInr: number | null; // null = separately quoted
+  requiresCustomQuote: boolean;
+}
+
+export const OPTIONAL_ONBOARDING_SERVICES: Record<
+  OnboardingServiceCode,
+  OnboardingServiceDefinition
+> = {
+  SELF_SERVICE: {
+    code: 'SELF_SERVICE',
+    name: 'Self-Service Onboarding',
+    description: 'Configure projects, towers, units, and floor plans directly using built-in wizards.',
+    oneTimeFeeInr: 0,
+    requiresCustomQuote: false,
+  },
+  ASSISTED_SINGLE_PROJECT: {
+    code: 'ASSISTED_SINGLE_PROJECT',
+    name: 'Assisted Single-Project Onboarding',
+    description: 'Dedicated specialist setup for 1 project, inventory matrix, price book, and cost sheet template.',
+    oneTimeFeeInr: 9999,
+    requiresCustomQuote: false,
+  },
+  ASSISTED_TWO_PROJECTS: {
+    code: 'ASSISTED_TWO_PROJECTS',
+    name: 'Assisted Onboarding (First Two Projects)',
+    description: 'White-glove onboarding, floor-plan mapping, and team setup for your first 2 projects.',
+    oneTimeFeeInr: 19999,
+    requiresCustomQuote: false,
+  },
+  CUSTOM_ENTERPRISE_IMPORT: {
+    code: 'CUSTOM_ENTERPRISE_IMPORT',
+    name: 'Complex Legacy Data Migration & Custom Setup',
+    description: 'Bespoke multi-project historical CRM/ERP migration and custom quotation templates.',
+    oneTimeFeeInr: null,
+    requiresCustomQuote: true,
+  },
+};
+
+export const WALLET_TOPUP_PRESETS_INR = [500, 2000, 5000] as const;
+export const MIN_CUSTOM_WALLET_TOPUP_INR = 100;
+export const MAX_CUSTOM_WALLET_TOPUP_INR = 500000;
+export const DEFAULT_SUBSCRIPTION_GRACE_DAYS = 7;
+
+export const AI_BILLING_RATE_CARD_V1 = {
+  version: 'AI_RATE_V2026_1',
+  usdToInrRate: 87,
+  models: {
+    'gpt-4.1': { inputPer1MUsd: 2.0, outputPer1MUsd: 8.0, minChargePaise: 25 },
+    'gpt-4.1-mini': { inputPer1MUsd: 0.4, outputPer1MUsd: 1.6, minChargePaise: 10 },
+    'gpt-4.1-nano': { inputPer1MUsd: 0.1, outputPer1MUsd: 0.4, minChargePaise: 5 },
+    'o4-mini': { inputPer1MUsd: 1.1, outputPer1MUsd: 4.4, minChargePaise: 25 },
+  } as Record<string, { inputPer1MUsd: number; outputPer1MUsd: number; minChargePaise: number }>,
+  defaultModelRate: { inputPer1MUsd: 2.0, outputPer1MUsd: 8.0, minChargePaise: 25 },
+} as const;
+
+export const WHATSAPP_BILLING_RATE_CARD_V1 = {
+  version: 'WA_META_RATE_V2026_1',
+  // Paise per billable conversation/template message by market & Meta category
+  markets: {
+    IN: { MARKETING: 88, UTILITY: 14, AUTHENTICATION: 14, SERVICE: 0 },
+    AE: { MARKETING: 380, UTILITY: 150, AUTHENTICATION: 150, SERVICE: 0 },
+    US: { MARKETING: 225, UTILITY: 40, AUTHENTICATION: 120, SERVICE: 0 },
+    GB: { MARKETING: 460, UTILITY: 200, AUTHENTICATION: 220, SERVICE: 0 },
+    ROW: { MARKETING: 500, UTILITY: 200, AUTHENTICATION: 200, SERVICE: 0 },
+  } as Record<
+    string,
+    Record<'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'SERVICE', number>
+  >,
+} as const;
+
 export const PRIMARY_WEB_NAVIGATION = [
-  { id: 'dashboard', label: 'Dashboard', path: '/app/dashboard', group: 'Overview', permission: 'dashboard:view' },
-  { id: 'projects-inventory', label: 'Projects & Inventory', path: '/app/inventory', group: 'Inventory & Pricing', permission: 'inventory:view' },
-  { id: 'parking', label: 'Parking', path: '/app/parking', group: 'Inventory & Pricing', permission: 'parking:view' },
-  { id: 'pricing-cost-sheets', label: 'Pricing & Cost Sheets', path: '/app/pricing', group: 'Inventory & Pricing', permission: 'pricing:view' },
-  { id: 'leads-crm', label: 'Leads & CRM', path: '/app/leads', group: 'Sales & CRM', permission: 'leads:view' },
-  { id: 'whatsapp-inbox', label: 'WhatsApp Inbox', path: '/app/inbox', group: 'Sales & CRM', permission: 'whatsapp:view' },
-  { id: 'channel-partners', label: 'Channel Partners', path: '/app/channel-partners', group: 'Sales & CRM', permission: 'partners:view' },
-  { id: 'site-visits', label: 'Site Visits', path: '/app/visits', group: 'Sales & CRM', permission: 'visits:view' },
-  { id: 'bookings-collections', label: 'Bookings & Collections', path: '/app/bookings', group: 'Finance & Docs', permission: 'bookings:view' },
-  { id: 'documents', label: 'Documents', path: '/app/documents', group: 'Finance & Docs', permission: 'documents:view' },
-  { id: 'reports-audit', label: 'Reports & Audit', path: '/app/reports', group: 'Governance', permission: 'reports:view' },
-  { id: 'settings', label: 'Settings', path: '/app/settings', group: 'Governance', permission: 'settings:view' },
+  { id: 'dashboard', label: 'Dashboard', path: '/builder/dashboard', group: 'Overview', permission: 'dashboard:view' },
+  { id: 'projects-inventory', label: 'Projects & Inventory', path: '/builder/inventory', group: 'Inventory & Pricing', permission: 'inventory:view' },
+  { id: 'parking', label: 'Parking', path: '/builder/parking', group: 'Inventory & Pricing', permission: 'parking:view' },
+  { id: 'pricing-cost-sheets', label: 'Pricing & Cost Sheets', path: '/builder/pricing', group: 'Inventory & Pricing', permission: 'pricing:view' },
+  { id: 'leads-crm', label: 'Leads & CRM', path: '/builder/leads', group: 'Sales & CRM', permission: 'leads:view' },
+  { id: 'whatsapp-inbox', label: 'WhatsApp Inbox', path: '/builder/inbox', group: 'Sales & CRM', permission: 'whatsapp:view' },
+  { id: 'channel-partners', label: 'Channel Partners', path: '/builder/channel-partners', group: 'Sales & CRM', permission: 'partners:view' },
+  { id: 'site-visits', label: 'Site Visits', path: '/builder/visits', group: 'Sales & CRM', permission: 'visits:view' },
+  { id: 'bookings-collections', label: 'Bookings & Collections', path: '/builder/bookings', group: 'Finance & Docs', permission: 'bookings:view' },
+  { id: 'documents', label: 'Documents', path: '/builder/documents', group: 'Finance & Docs', permission: 'documents:view' },
+  { id: 'reports-audit', label: 'Reports & Audit', path: '/builder/reports', group: 'Governance', permission: 'reports:view' },
+  { id: 'settings', label: 'Settings', path: '/builder/settings', group: 'Governance', permission: 'settings:view' },
 ] as const;
 
 export const MOBILE_BOTTOM_TABS = [

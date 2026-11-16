@@ -1,6 +1,10 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { DEFAULT_SAAS_PLANS, GLOBAL_COUNTRIES } from '@bharat-makaan/config';
+import {
+  DEFAULT_SAAS_PLANS,
+  GLOBAL_COUNTRIES,
+  calculateBuilderSubscriptionMonthlyInr,
+} from '@bharat-makaan/config';
 import {
   DEFAULT_ROLE_PERMISSIONS,
   isPrivilegedMfaRole,
@@ -8,6 +12,7 @@ import {
   type Organization,
   type OrganizationMember,
   type Subscription,
+  type TenantEntitlements,
 } from '@bharat-makaan/shared';
 import {
   createOrganizationSchema,
@@ -45,7 +50,8 @@ export async function createOrganizationService(
 
   const orgRef = db.collection('organizations').doc();
   const orgId = orgRef.id;
-  const starterPlan = DEFAULT_SAAS_PLANS.STARTER;
+  const singlePkg = DEFAULT_SAAS_PLANS.SINGLE_PROJECT;
+  const pricing = calculateBuilderSubscriptionMonthlyInr('SINGLE_PROJECT', 1, singlePkg.defaultTaxPct);
   const countryCode = (input.countryCode || 'IN').toUpperCase();
   const countryDefaults = GLOBAL_COUNTRIES[countryCode] ?? GLOBAL_COUNTRIES.IN!;
 
@@ -81,7 +87,7 @@ export async function createOrganizationService(
       exemptLabel: 'Tax Exempt',
     },
     status: 'ACTIVE',
-    subscriptionPlanId: 'STARTER',
+    subscriptionPlanId: 'SINGLE_PROJECT',
     leadProtectionDays: input.leadProtectionDays,
     whatsappAutoSendAi: false,
     createdBy: actor.uid,
@@ -112,16 +118,19 @@ export async function createOrganizationService(
   const subscription: Subscription = {
     id: orgId,
     orgId,
-    planCode: 'STARTER',
+    planCode: 'SINGLE_PROJECT',
     billingCycle: 'MONTHLY',
-    basePriceInr: starterPlan.monthlyPriceInr ?? 2999,
+    subscribedProjectCapacity: 1,
+    basePriceInr: pricing.monthlySubtotalInr,
+    taxRatePct: singlePkg.defaultTaxPct,
+    monthlyTotalInr: pricing.monthlyTotalInr,
     onboardingFeePaid: false,
-    status: 'TRIAL',
+    status: 'PENDING_CHECKOUT',
     entitlements: {
-      maxProjects: starterPlan.entitlements.maxProjects,
-      maxUsers: starterPlan.entitlements.maxUsers,
-      monthlyAiCredits: starterPlan.entitlements.monthlyAiCredits,
-      monthlyWhatsappQuota: starterPlan.entitlements.monthlyWhatsappQuota,
+      maxProjects: 1,
+      maxUsers: -1,
+      monthlyAiCredits: 0,
+      monthlyWhatsappQuota: 0,
     },
     usageThisCycle: {
       projectsCount: 0,
@@ -140,10 +149,29 @@ export async function createOrganizationService(
     updatedAt: nowIso,
   };
 
+  const entitlements: TenantEntitlements = {
+    id: orgId,
+    orgId,
+    packageCode: 'SINGLE_PROJECT',
+    workspaceAccessMode: 'FULL_ACCESS',
+    subscribedProjectCapacity: 1,
+    activeProjectsCount: 0,
+    aiBalancePaise: 0,
+    aiReservedPaise: 0,
+    whatsappBalancePaise: 0,
+    whatsappReservedPaise: 0,
+    aiOverdraftLimitPaise: 0,
+    whatsappOverdraftLimitPaise: 0,
+    lowBalanceThresholdPaise: 25000,
+    gracePeriodEndsAt: null,
+    updatedAt: nowIso,
+  };
+
   await db.runTransaction(async (tx) => {
     tx.set(orgRef, organization);
     tx.set(db.collection('organization_members').doc(memberId), membership);
     tx.set(db.collection('subscriptions').doc(orgId), subscription);
+    tx.set(db.collection('entitlements').doc(orgId), entitlements);
     await writeAuditEvent(
       db,
       {
@@ -271,6 +299,12 @@ export async function updateMemberAccessService(
   rawInput: unknown
 ): Promise<OrganizationMember> {
   const input = updateMemberAccessSchema.parse(rawInput);
+  if (actor.uid === input.targetUid && !actor.isSuperAdmin) {
+    throw new HttpsError(
+      'permission-denied',
+      'SELF_MODIFICATION_FORBIDDEN: Users cannot modify their own role, permissions, or membership status.'
+    );
+  }
   const memberId = `${input.orgId}_${input.targetUid}`;
   const nowIso = new Date().toISOString();
 
@@ -283,6 +317,27 @@ export async function updateMemberAccessService(
 
     const before = snap.data() as OrganizationMember;
     const updatedRole = input.role ?? before.role;
+    const updatedStatus = input.status ?? before.status;
+
+    if (
+      before.role === 'BUILDER_ADMIN' &&
+      before.status === 'ACTIVE' &&
+      (updatedRole !== 'BUILDER_ADMIN' || updatedStatus !== 'ACTIVE')
+    ) {
+      const adminsSnap = await tx.get(
+        db
+          .collection('organization_members')
+          .where('orgId', '==', input.orgId)
+          .where('role', '==', 'BUILDER_ADMIN')
+          .where('status', '==', 'ACTIVE')
+      );
+      if (adminsSnap.size <= 1) {
+        throw new HttpsError(
+          'failed-precondition',
+          'SOLE_ADMIN_PROTECTED: Cannot suspend or demote the last active Builder Admin of the organization.'
+        );
+      }
+    }
     const updated: OrganizationMember = {
       ...before,
       role: updatedRole,

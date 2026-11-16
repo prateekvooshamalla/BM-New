@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BRAND_CONFIG } from '@bharat-makaan/config';
 import { buildSitemapXml, STATIC_PUBLIC_ROUTES } from '../../scripts/generate-sitemap';
-import { createOrganizationService } from '../../functions/src/organizations';
+import { createOrganizationService, superAdminUpdateTenantService } from '../../functions/src/organizations';
 import { createProjectService } from '../../functions/src/projects';
 import { createUnitService } from '../../functions/src/inventory';
 import { createTransactionalTestFirestore } from './helpers/in-memory-firestore';
@@ -23,6 +23,17 @@ describe('Phase 8 — Public Property Portal: Publication Visibility & SEO Sitem
       legalName: 'Public Test Builder Pvt Ltd',
       headquartersCity: 'Bengaluru',
     });
+
+    await superAdminUpdateTenantService(
+      db,
+      { uid: 'uid-sa', email: 'prateek.parts@gmail.com', isSuperAdmin: true, mfaVerified: true },
+      {
+        orgId: organization.id,
+        planCode: 'MULTI_PROJECT',
+        subscribedProjectCapacity: 2,
+        reason: 'Provision 2 project slots for public vs private visibility test',
+      }
+    );
 
     const pPrivate = await createProjectService(db, actor, 'BUILDER_ADMIN', {
       orgId: organization.id,

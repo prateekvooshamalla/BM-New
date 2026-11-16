@@ -11,7 +11,8 @@ service cloud.firestore {
     }
 
     function isSuperAdmin() {
-      return isSignedIn() && request.auth.token.platformRole == 'PLATFORM_SUPER_ADMIN';
+      return isSignedIn()
+        && request.auth.token.get('platformRole', '') == 'PLATFORM_SUPER_ADMIN';
     }
 
     function memberDocPath(orgId) {
@@ -246,7 +247,11 @@ service cloud.firestore {
     match /partner_organizations/{partnerOrgId} {
       allow read: if isSuperAdmin()
         || isActivePartnerMember(partnerOrgId)
-        || (isSignedIn() && resource.data.authorizedOrgIds.size() > 0);
+        || (
+          isSignedIn()
+          && resource.data.authorizedOrgIds.size() > 0
+          && hasTenantOrgPermission(resource.data.authorizedOrgIds[0], 'partners:view')
+        );
       allow create, update, delete: if false;
     }
 
@@ -331,8 +336,47 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    match /entitlements/{orgId} {
+      allow read: if isSuperAdmin()
+        || hasOrgPermission(orgId, 'billing:view')
+        || hasOrgPermission(orgId, 'dashboard:view');
+      allow create, update, delete: if false;
+    }
+
+    match /subscription_events/{eventId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'billing:view');
+      allow create, update, delete: if false;
+    }
+
     match /invoices/{invoiceId} {
       allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'billing:view');
+      allow create, update, delete: if false;
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'billing:view');
+      allow create, update, delete: if false;
+    }
+
+    match /onboarding_orders/{orderId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'billing:view');
+      allow create, update, delete: if false;
+    }
+
+    match /credit_topups/{topupId} {
+      allow read: if isSuperAdmin() || hasOrgPermission(resource.data.orgId, 'billing:view');
+      allow create, update, delete: if false;
+    }
+
+    match /usage_ledger/{entryId} {
+      allow read: if isSuperAdmin()
+        || hasOrgPermission(resource.data.orgId, 'billing:view')
+        || hasOrgPermission(resource.data.orgId, 'reports:view');
+      allow create, update, delete: if false;
+    }
+
+    match /customer_saved_properties/{savedId} {
+      allow read: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow create, update, delete: if false;
     }
 

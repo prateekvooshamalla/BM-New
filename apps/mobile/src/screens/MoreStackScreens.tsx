@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { signOut } from 'firebase/auth';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
   formatInr,
@@ -10,6 +10,7 @@ import {
   type PartnerOrganization,
   type Quotation,
   type SiteVisit,
+  type TenantEntitlements,
 } from '@bharat-makaan/shared';
 import {
   clearSecureSession,
@@ -53,6 +54,7 @@ export function MoreStackScreen() {
   const [partners, setPartners] = useState<PartnerOrganization[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [entitlements, setEntitlements] = useState<TenantEntitlements | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const authorizedItems = filterAuthorizedMobileMoreFeatures(activeMember, isSuperAdmin);
@@ -88,6 +90,11 @@ export function MoreStackScreen() {
       (s) => setDocuments(s.docs.map((d) => d.data() as DocumentRecord)),
       () => setDocuments([])
     );
+    const uEnt = onSnapshot(
+      doc(mobileDb, 'entitlements', activeOrgId),
+      (s) => setEntitlements(s.exists() ? (s.data() as TenantEntitlements) : null),
+      () => setEntitlements(null)
+    );
 
     return () => {
       uQt();
@@ -95,6 +102,7 @@ export function MoreStackScreen() {
       uPt();
       uBk();
       uDc();
+      uEnt();
     };
   }, [activeOrgId]);
 
@@ -295,9 +303,20 @@ export function MoreStackScreen() {
             )}
 
             <NativeCard>
+              <Text style={styles.itemTitle}>
+                Package: {entitlements?.packageCode ?? 'SINGLE_PROJECT'}
+              </Text>
               <Text style={styles.itemSub}>
-                SaaS Subscription Management is handled via the Enterprise Web Billing Portal in
-                compliance with mobile app-store guidelines.
+                Active Projects: {entitlements?.activeProjectsCount ?? projects.length} /{' '}
+                {entitlements?.subscribedProjectCapacity ?? 1}
+              </Text>
+              <Text style={styles.itemSub}>
+                AI Wallet: {formatInr((entitlements?.aiBalancePaise ?? 0) / 100)} • WhatsApp Wallet:{' '}
+                {formatInr((entitlements?.whatsappBalancePaise ?? 0) / 100)}
+              </Text>
+              <Text style={styles.itemSub}>
+                SaaS Subscription &amp; Wallet Top-Ups are managed via the Enterprise Web Billing
+                Console (/builder/billing) in compliance with mobile app-store guidelines.
               </Text>
             </NativeCard>
 

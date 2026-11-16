@@ -46,10 +46,12 @@ export async function onboardPartnerOrganizationService(
     commissionPct: number;
     commissionTerms: string;
     partnerAdminUid?: string;
+    initialScopeStatus?: 'PENDING' | 'AUTHORIZED';
   }
 ): Promise<PartnerOrganization> {
   const nowIso = new Date().toISOString();
   const ref = db.collection('partner_organizations').doc();
+  const scopeStatus = params.initialScopeStatus ?? 'AUTHORIZED';
   const partnerOrg: PartnerOrganization = {
     id: ref.id,
     companyName: params.companyName.trim(),
@@ -59,15 +61,15 @@ export async function onboardPartnerOrganizationService(
     reraNumber: params.reraNumber?.trim() || undefined,
     gstin: params.gstin?.trim() || undefined,
     officeCity: params.officeCity.trim(),
-    status: 'ACTIVE',
-    authorizedOrgIds: [params.orgId],
+    status: scopeStatus === 'AUTHORIZED' ? 'ACTIVE' : 'PENDING',
+    authorizedOrgIds: scopeStatus === 'AUTHORIZED' ? [params.orgId] : [],
     builderScopes: {
       [params.orgId]: {
         orgId: params.orgId,
         projectIds: params.projectIds,
         commissionPct: params.commissionPct,
         commissionTerms: params.commissionTerms,
-        status: 'AUTHORIZED',
+        status: scopeStatus,
       },
     },
     metrics: {
@@ -439,6 +441,7 @@ export async function authorizePartnerForBuilderScopeService(
 
   const updated: PartnerOrganization = {
     ...prev,
+    status: nextAuthorizedOrgIds.length > 0 ? 'ACTIVE' : prev.status,
     authorizedOrgIds: nextAuthorizedOrgIds,
     builderScopes: {
       ...prev.builderScopes,

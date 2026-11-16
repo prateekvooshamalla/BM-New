@@ -876,3 +876,4 @@ export const decideApprovalSchema = z.object({
 });
 
 export * from './ai-assistant';
+export * from './billing-auth';
