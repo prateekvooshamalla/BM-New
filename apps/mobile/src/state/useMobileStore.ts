@@ -14,6 +14,12 @@ export const MOBILE_MORE_FEATURES: Array<{
   permission: PermissionKey;
 }> = [
   {
+    key: 'AiAssistant',
+    title: 'AI Assistant & Floor-Plan Wizard',
+    subtitle: 'Natural-language CRM queries, tower setup & PDF plan extraction',
+    permission: 'inventory:view',
+  },
+  {
     key: 'PricingQuotations',
     title: 'Pricing & Quotations',
     subtitle: 'Active price books & customer cost sheets',

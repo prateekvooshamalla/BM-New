@@ -56,7 +56,7 @@ const DEFAULT_CLP_MILESTONES: PaymentPlanMilestone[] = [
   { sequence: 2, name: 'Sale Agreement Execution', percentage: 10, dueTrigger: 'Within 30 Days of Booking', taxTreatment: 'PROPORTIONAL_GST' },
   { sequence: 3, name: 'Excavation & Foundation', percentage: 15, dueTrigger: 'On Completion of Foundation', taxTreatment: 'PROPORTIONAL_GST' },
   { sequence: 4, name: 'Basement & Podium Slabs', percentage: 15, dueTrigger: 'On Casting of Podium Slab', taxTreatment: 'PROPORTIONAL_GST' },
-  { sequence: 5, name: '7th Floor Superstructure Slab', percentage: 15, dueTrigger: 'On Casting of 7th Floor Slab', taxTreatment: 'PROPORTIONAL_GST' },
+  { sequence: 5, name: 'Mid-Level Superstructure Slab', percentage: 15, dueTrigger: 'On Casting of Mid-Level Superstructure Slab', taxTreatment: 'PROPORTIONAL_GST' },
   { sequence: 6, name: 'Terrace & Brick/Block Work', percentage: 15, dueTrigger: 'On Completion of Terrace Slab', taxTreatment: 'PROPORTIONAL_GST' },
   { sequence: 7, name: 'Internal Flooring & MEP', percentage: 15, dueTrigger: 'On Completion of Internal Finishes', taxTreatment: 'PROPORTIONAL_GST' },
   { sequence: 8, name: 'Notice of Possession & Handover', percentage: 5, dueTrigger: 'On Offer of Possession', taxTreatment: 'INCLUDE_POSSESSION_CHARGES' },

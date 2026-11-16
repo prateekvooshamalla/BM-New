@@ -78,7 +78,7 @@ export function InventoryScreen() {
       />
       <ScrollView contentContainerStyle={styles.body}>
         <NativeInput
-          placeholder="Search by Unit # or BHK (e.g. C-704, 3 BHK)"
+          placeholder="Search by Unit # or BHK (e.g. 101, A-1204, 3 BHK)"
           value={search}
           onChangeText={setSearch}
         />

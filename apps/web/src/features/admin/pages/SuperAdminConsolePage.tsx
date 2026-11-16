@@ -1,8 +1,13 @@
 import * as React from 'react';
 import { Link } from 'react-router-dom';
-import { ShieldCheck } from 'lucide-react';
+import { Eye, ShieldCheck } from 'lucide-react';
 import { DEFAULT_SAAS_PLANS } from '@bharat-makaan/config';
-import { formatInr, type AuditEvent, type Organization, type Subscription } from '@bharat-makaan/shared';
+import {
+  formatInr,
+  type AuditEvent,
+  type Organization,
+  type Subscription,
+} from '@bharat-makaan/shared';
 import { callBackendFunction } from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -10,8 +15,18 @@ import { EmptyState } from '@/components/shared/EmptyState';
 import { DataTable } from '@/components/shared/DataTable';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 export function SuperAdminConsolePage() {
   const { isSuperAdmin } = useTenantStore();
@@ -23,6 +38,11 @@ export function SuperAdminConsolePage() {
     systemHealth: Record<string, any>;
   } | null>(null);
   const [banner, setBanner] = React.useState<string | null>(null);
+
+  const [inspectTarget, setInspectTarget] = React.useState<Organization | null>(null);
+  const [inspectReason, setInspectReason] = React.useState('');
+  const [inspectResult, setInspectResult] = React.useState<Record<string, any> | null>(null);
+  const [inspectBusy, setInspectBusy] = React.useState(false);
 
   const loadOverview = React.useCallback(async () => {
     try {
@@ -75,6 +95,30 @@ export function SuperAdminConsolePage() {
     }
   };
 
+  const handleAuditedInspect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inspectTarget || inspectReason.trim().length < 10) return;
+    setInspectBusy(true);
+    try {
+      const res = await callBackendFunction<any, Record<string, any>>(
+        'superAdminInspectOrganizationData',
+        {
+          orgId: inspectTarget.id,
+          reason: inspectReason.trim(),
+        }
+      );
+      setInspectResult(res);
+      await loadOverview();
+      setBanner(
+        `Audited support inspection recorded for "${inspectTarget.name}" (Audit Trail updated).`
+      );
+    } catch (err) {
+      setBanner(err instanceof Error ? err.message : 'Audited inspection denied.');
+    } finally {
+      setInspectBusy(false);
+    }
+  };
+
   if (!isSuperAdmin) {
     return (
       <div className="mx-auto max-w-4xl px-6 py-14 space-y-6">
@@ -92,7 +136,7 @@ export function SuperAdminConsolePage() {
       <PageHeader
         eyebrow="Global SaaS Governance"
         title="Bharat Makaan — Platform Super Admin"
-        description="Manage builder organizations, SaaS subscriptions, plans, AI/WhatsApp usage, support tickets, system health, and global audit trails."
+        description="Manage global builder/agency organizations, subscriptions, feature entitlements, audited support inspections, and platform operational health."
         actions={
           <Button variant="outline" size="sm" asChild>
             <Link to="/app/dashboard">Return to Builder Console</Link>
@@ -119,7 +163,9 @@ export function SuperAdminConsolePage() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs text-muted-foreground">Builder Tenants</CardTitle>
+                <CardTitle className="text-xs text-muted-foreground">
+                  Registered Organizations
+                </CardTitle>
               </CardHeader>
               <CardContent className="text-xl font-bold">
                 {data.systemHealth.totalOrganizations}
@@ -145,18 +191,29 @@ export function SuperAdminConsolePage() {
 
           <Tabs defaultValue="tenants">
             <TabsList>
-              <TabsTrigger value="tenants">Builder Organizations ({data.organizations.length})</TabsTrigger>
+              <TabsTrigger value="tenants">
+                Organizations ({data.organizations.length})
+              </TabsTrigger>
               <TabsTrigger value="plans">SaaS Plan Catalog</TabsTrigger>
-              <TabsTrigger value="support">Support Requests ({data.supportTickets.length})</TabsTrigger>
-              <TabsTrigger value="audit">Global Audit Trail ({data.recentAudits.length})</TabsTrigger>
+              <TabsTrigger value="support">
+                Support Requests ({data.supportTickets.length})
+              </TabsTrigger>
+              <TabsTrigger value="audit">
+                Global Audit Trail ({data.recentAudits.length})
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="tenants">
               <DataTable
                 data={data.organizations}
-                emptyMessage="No builder organizations provisioned yet."
+                emptyMessage="No builder or agency organizations provisioned yet."
                 columns={[
-                  { accessorKey: 'name', header: 'Builder Name' },
+                  { accessorKey: 'name', header: 'Organization Name' },
+                  {
+                    accessorKey: 'organizationType',
+                    header: 'Type',
+                    cell: ({ row }) => row.original.organizationType ?? 'BUILDER',
+                  },
                   { accessorKey: 'headquartersCity', header: 'HQ City' },
                   { accessorKey: 'subscriptionPlanId', header: 'Plan' },
                   {
@@ -166,9 +223,21 @@ export function SuperAdminConsolePage() {
                   },
                   {
                     id: 'actions',
-                    header: 'Governance',
+                    header: 'Governance & Audited Access',
                     cell: ({ row }) => (
-                      <div className="flex gap-1.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setInspectTarget(row.original);
+                            setInspectReason('');
+                            setInspectResult(null);
+                          }}
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          Audited Inspect
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
@@ -248,6 +317,65 @@ export function SuperAdminConsolePage() {
           </Tabs>
         </>
       )}
+
+      {/* Audited Tenant Support Inspection Dialog */}
+      <Dialog
+        open={Boolean(inspectTarget)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setInspectTarget(null);
+            setInspectResult(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Audited Tenant Inspection — {inspectTarget?.name}
+            </DialogTitle>
+            <DialogDescription>
+              Customer-sensitive tenant records are strictly isolated. Entering a support
+              justification logs an immutable `SUPER_ADMIN_TENANT_INSPECTION` audit record.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleAuditedInspect} className="space-y-3">
+            <div className="space-y-1">
+              <Label>Support Ticket / Audit Justification (Min 10 characters) *</Label>
+              <Input
+                required
+                minLength={10}
+                placeholder="e.g., Support Ticket #1042 — Verify project quota and inventory sync"
+                value={inspectReason}
+                onChange={(e) => setInspectReason(e.target.value)}
+              />
+            </div>
+
+            {inspectResult && (
+              <div className="rounded-lg border border-border bg-secondary/50 p-3 text-xs space-y-1.5">
+                <div className="font-semibold text-foreground">
+                  Operational Summary (PII Masked)
+                </div>
+                <div>Projects Registered: {inspectResult.projects?.length ?? 0}</div>
+                <div>Active Staff Members: {inspectResult.activeMembersCount ?? 0}</div>
+                <div>Total Units: {inspectResult.operationalCounts?.unitsCount ?? 0}</div>
+                <div>Total Leads: {inspectResult.operationalCounts?.leadsCount ?? 0}</div>
+                <div>Total Bookings: {inspectResult.operationalCounts?.bookingsCount ?? 0}</div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={inspectBusy || inspectReason.trim().length < 10}
+              >
+                {inspectBusy ? 'Logging Audit & Inspecting...' : 'Authorize & Inspect Summary'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

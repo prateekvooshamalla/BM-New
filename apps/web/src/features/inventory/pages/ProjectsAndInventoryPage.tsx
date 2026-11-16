@@ -13,6 +13,7 @@ import {
   Lock,
   Plus,
   Share2,
+  Sparkles,
   Unlock,
 } from 'lucide-react';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
@@ -78,8 +79,16 @@ const STATUS_OPTIONS: UnitStatus[] = [
 
 export function ProjectsAndInventoryPage() {
   const navigate = useNavigate();
-  const { activeOrgId, activeOrganization, projects, activeProjectId, activeProject, selectProject } =
-    useTenantStore();
+  const {
+    activeOrgId,
+    activeOrganization,
+    projects,
+    activeProjectId,
+    activeProject,
+    selectProject,
+    setSelectedContextEntity,
+    setAiDrawerOpen,
+  } = useTenantStore();
 
   const [phases, setPhases] = React.useState<ProjectPhase[]>([]);
   const [towers, setTowers] = React.useState<Tower[]>([]);
@@ -128,14 +137,14 @@ export function ProjectsAndInventoryPage() {
   // Create Phase / Tower Form
   const [phaseName, setPhaseName] = React.useState('Phase 1');
   const [phaseCode, setPhaseCode] = React.useState('PH1');
-  const [towerName, setTowerName] = React.useState('Tower C');
-  const [towerCode, setTowerCode] = React.useState('C');
+  const [towerName, setTowerName] = React.useState('Tower 1');
+  const [towerCode, setTowerCode] = React.useState('T1');
   const [towerType, setTowerType] = React.useState<'TOWER' | 'BLOCK' | 'SECTOR' | 'VILLA_CLUSTER'>('TOWER');
-  const [towerFloors, setTowerFloors] = React.useState('14');
+  const [towerFloors, setTowerFloors] = React.useState('15');
 
   // Create Unit Form
   const [unitTowerId, setUnitTowerId] = React.useState('');
-  const [unitFloorNo, setUnitFloorNo] = React.useState('7');
+  const [unitFloorNo, setUnitFloorNo] = React.useState('1');
   const [unitNumber, setUnitNumber] = React.useState('');
   const [unitTypeVal, setUnitTypeVal] = React.useState<'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE'>('APARTMENT');
   const [unitBhk, setUnitBhk] = React.useState('3 BHK');
@@ -158,6 +167,13 @@ export function ProjectsAndInventoryPage() {
   const [bulkRate, setBulkRate] = React.useState('8800');
 
   const currentProjectId = activeProjectId ?? projects[0]?.id ?? null;
+
+  React.useEffect(() => {
+    setSelectedContextEntity({
+      towerId: selectedTowerId !== 'ALL' ? selectedTowerId : null,
+      unitId: selectedUnit?.id ?? null,
+    });
+  }, [selectedTowerId, selectedUnit?.id, setSelectedContextEntity]);
 
   React.useEffect(() => {
     if (!activeOrgId || !currentProjectId) {
@@ -521,6 +537,22 @@ export function ProjectsAndInventoryPage() {
             )}
             {currentProjectId && (
               <PermissionGate permission="inventory:manage" projectId={currentProjectId}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => navigate('/app/ai-studio')}
+                >
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  AI Floor-Plan Studio
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAiDrawerOpen(true, 'Add Tower 1')}
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  AI Tower Wizard
+                </Button>
                 {towers.length > 0 && (
                   <Button variant="secondary" size="sm" onClick={() => setBulkWizardOpen(true)}>
                     Bulk Generate Floor Units
@@ -650,7 +682,7 @@ export function ProjectsAndInventoryPage() {
 
               <div className="grid gap-2.5 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8">
                 <Input
-                  placeholder="Unit # (e.g. C-704)"
+                  placeholder="Unit # (e.g. 101, A-1204)"
                   value={unitSearch}
                   onChange={(e) => setUnitSearch(e.target.value)}
                 />
@@ -1190,7 +1222,7 @@ export function ProjectsAndInventoryPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label>Unit / Plot Number *</Label>
-                <Input required placeholder="e.g., C-704 or PLOT-12" value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} />
+                <Input required placeholder="e.g., 101, A-1204, VILLA-08 or PLOT-12" value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label>Unit Type *</Label>

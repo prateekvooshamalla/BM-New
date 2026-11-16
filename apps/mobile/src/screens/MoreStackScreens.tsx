@@ -31,6 +31,7 @@ import {
   NativeStatusPill,
   ScreenHeader,
 } from '../components/NativePrimitives';
+import { AiAssistantScreen } from './AiAssistantScreen';
 
 const palette = DESIGN_TOKENS.colors.light;
 
@@ -139,6 +140,8 @@ export function MoreStackScreen() {
         </View>
 
         {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+
+        {subScreen === 'AiAssistant' && <AiAssistantScreen />}
 
         {subScreen === 'PricingQuotations' &&
           (quotations.length === 0 ? (

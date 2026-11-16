@@ -73,6 +73,11 @@ const SuperAdminConsolePage = React.lazy(() =>
     default: m.SuperAdminConsolePage,
   }))
 );
+const AiInventoryStudioPage = React.lazy(() =>
+  import('@/features/ai-assistant/pages/AiInventoryStudioPage').then((m) => ({
+    default: m.AiInventoryStudioPage,
+  }))
+);
 
 import {
   PublicAboutPage,
@@ -143,6 +148,7 @@ export function AppRouter() {
             <Route path="documents" element={<DocumentsPage />} />
             <Route path="reports" element={<ReportsAndAuditPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="ai-studio" element={<AiInventoryStudioPage />} />
             <Route path="*" element={<DashboardPage />} />
           </Route>
 

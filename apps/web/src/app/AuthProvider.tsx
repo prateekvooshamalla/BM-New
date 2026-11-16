@@ -26,6 +26,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setPartnerContext = useTenantStore((s) => s.setPartnerContext);
   const resetSession = useTenantStore((s) => s.resetSession);
   const activeOrgId = useTenantStore((s) => s.activeOrgId);
+  const activeMember = useTenantStore((s) => s.activeMember);
+  const isSuperAdmin = useTenantStore((s) => s.isSuperAdmin);
 
   React.useEffect(() => {
     if (!isFirebaseConfigured && !isEmulatorMode) {
@@ -143,8 +145,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        const list = snap.docs.map((d) => d.data() as Project);
-        setProjects(list);
+        const rawList = snap.docs.map((d) => d.data() as Project);
+        const isUnrestrictedAdmin =
+          isSuperAdmin ||
+          activeMember?.role === 'PLATFORM_SUPER_ADMIN' ||
+          activeMember?.role === 'PROJECT_DIRECTOR' ||
+          !activeMember?.assignedProjectIds ||
+          activeMember.assignedProjectIds.length === 0;
+        const filtered = isUnrestrictedAdmin
+          ? rawList
+          : rawList.filter((p) => activeMember.assignedProjectIds.includes(p.id));
+        setProjects(filtered);
       },
       () => {
         setProjects([]);
@@ -152,7 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
 
     return () => unsub();
-  }, [activeOrgId, setProjects]);
+  }, [activeMember, activeOrgId, isSuperAdmin, setProjects]);
 
   return <>{children}</>;
 }

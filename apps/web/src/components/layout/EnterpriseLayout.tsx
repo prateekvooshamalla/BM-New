@@ -20,6 +20,7 @@ import {
   Settings,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Sun,
   Users,
   X,
@@ -37,6 +38,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { CreateOrganizationDialog } from '@/features/organizations/components/CreateOrganizationDialog';
+import { AiAssistantDock } from '@/features/ai-assistant/components/AiAssistantDock';
 
 const NAV_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
@@ -67,11 +69,14 @@ export function EnterpriseLayout() {
     activeOrgId,
     activeMember,
     projects,
+    projectScopeMode,
     activeProjectId,
+    aiDrawerOpen,
     partnerMemberships,
     theme,
     selectOrganization,
     selectProject,
+    setAiDrawerOpen,
     toggleTheme,
   } = useTenantStore();
 
@@ -291,17 +296,32 @@ export function EnterpriseLayout() {
                   Project Context:
                 </span>
                 <Select
-                  value={activeProjectId ?? '__ALL__'}
-                  onValueChange={(val) => selectProject(val === '__ALL__' ? null : val)}
+                  value={
+                    activeProjectId
+                      ? activeProjectId
+                      : projectScopeMode === 'PORTFOLIO_OVERVIEW'
+                        ? '__PORTFOLIO__'
+                        : '__ALL__'
+                  }
+                  onValueChange={(val) => {
+                    if (val === '__ALL__') {
+                      selectProject(null, 'ALL_PROJECTS');
+                    } else if (val === '__PORTFOLIO__') {
+                      selectProject(null, 'PORTFOLIO_OVERVIEW');
+                    } else {
+                      selectProject(val, 'SINGLE_PROJECT');
+                    }
+                  }}
                 >
-                  <SelectTrigger className="h-8 w-[200px] sm:w-[240px] text-xs">
+                  <SelectTrigger className="h-8 w-[200px] sm:w-[250px] text-xs">
                     <SelectValue placeholder="All Projects" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__ALL__">All Organization Projects</SelectItem>
+                    <SelectItem value="__PORTFOLIO__">Portfolio Consolidated View</SelectItem>
                     {projects.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
-                        {p.name} ({p.code})
+                        {p.name} ({p.code}) — {p.city}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -311,6 +331,18 @@ export function EnterpriseLayout() {
           </div>
 
           <div className="flex items-center gap-2">
+            {activeOrgId && (
+              <Button
+                type="button"
+                variant={aiDrawerOpen ? 'default' : 'outline'}
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
+                onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>AI Assistant</span>
+              </Button>
+            )}
             <Link
               to="/"
               className="hidden text-xs font-medium text-muted-foreground hover:text-foreground sm:inline px-2"
@@ -367,6 +399,7 @@ export function EnterpriseLayout() {
       </div>
 
       <CreateOrganizationDialog open={createOrgOpen} onOpenChange={setCreateOrgOpen} />
+      <AiAssistantDock />
     </div>
   );
 }

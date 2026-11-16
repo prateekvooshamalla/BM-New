@@ -378,7 +378,7 @@ export function DocumentsPage() {
               <Label>Document Title *</Label>
               <Input
                 required
-                placeholder="Tower C Typical 3rd–14th Floor Plan"
+                placeholder="e.g., Tower 1 Typical Floor Plan or Master Layout"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
               />

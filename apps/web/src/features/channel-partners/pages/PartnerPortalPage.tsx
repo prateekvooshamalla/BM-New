@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { Building2, Handshake, ShieldCheck } from 'lucide-react';
+import { collection, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
+import { Building2, Handshake, ShieldCheck, Sparkles } from 'lucide-react';
 import {
   formatAreaSqft,
   formatInr,
   type LeadRegistration,
-  type Unit,
+  type Organization,
+  type Project,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, db } from '@/lib/firebase';
 import { useTenantStore } from '@/state/useTenantStore';
@@ -18,11 +19,21 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { AiAssistantDock } from '@/features/ai-assistant/components/AiAssistantDock';
 
 export function PartnerPortalPage() {
-  const { activePartnerOrg } = useTenantStore();
-  const [units, setUnits] = React.useState<Unit[]>([]);
+  const { activePartnerOrg, aiDrawerOpen, setAiDrawerOpen } = useTenantStore();
+  const [units, setUnits] = React.useState<Array<Record<string, any>>>([]);
   const [registrations, setRegistrations] = React.useState<LeadRegistration[]>([]);
+  const [builderOrgs, setBuilderOrgs] = React.useState<Organization[]>([]);
+  const [authorizedProjects, setAuthorizedProjects] = React.useState<Project[]>([]);
 
   const [builderOrgId, setBuilderOrgId] = React.useState('');
   const [projectId, setProjectId] = React.useState('');
@@ -32,10 +43,17 @@ export function PartnerPortalPage() {
 
   React.useEffect(() => {
     if (!activePartnerOrg) return;
-    const firstOrgId = activePartnerOrg.authorizedOrgIds[0] ?? '';
+    const orgIds = activePartnerOrg.authorizedOrgIds ?? [];
+    const firstOrgId = orgIds[0] ?? '';
     setBuilderOrgId(firstOrgId);
-    const firstProj = activePartnerOrg.builderScopes?.[firstOrgId]?.projectIds[0] ?? '';
-    setProjectId(firstProj);
+
+    void Promise.all(orgIds.map((oid) => getDoc(doc(db, 'organizations', oid)))).then(
+      (snaps) => {
+        setBuilderOrgs(
+          snaps.filter((s) => s.exists()).map((s) => s.data() as Organization)
+        );
+      }
+    );
 
     const uReg = onSnapshot(
       query(collection(db, 'lead_registrations'), where('partnerOrgId', '==', activePartnerOrg.id)),
@@ -46,22 +64,60 @@ export function PartnerPortalPage() {
     return () => uReg();
   }, [activePartnerOrg]);
 
+  // Load authorized projects for selected builder
   React.useEffect(() => {
-    if (!builderOrgId || !projectId) {
+    if (!activePartnerOrg || !builderOrgId) {
+      setAuthorizedProjects([]);
+      setProjectId('');
+      return;
+    }
+    const scopedProjectIds =
+      activePartnerOrg.builderScopes?.[builderOrgId]?.projectIds ?? [];
+
+    if (scopedProjectIds.length === 0) {
+      setAuthorizedProjects([]);
+      setProjectId('');
+      return;
+    }
+
+    void Promise.all(scopedProjectIds.map((pid) => getDoc(doc(db, 'projects', pid)))).then(
+      (snaps) => {
+        const list = snaps.filter((s) => s.exists()).map((s) => s.data() as Project);
+        setAuthorizedProjects(list);
+        setProjectId((prev) =>
+          prev && list.some((p) => p.id === prev) ? prev : (list[0]?.id ?? '')
+        );
+      }
+    );
+  }, [activePartnerOrg, builderOrgId]);
+
+  // Fetch sanitized partner-permitted inventory via backend service
+  React.useEffect(() => {
+    if (!activePartnerOrg || !builderOrgId || !projectId) {
       setUnits([]);
       return;
     }
-    const uUnits = onSnapshot(
-      query(
-        collection(db, 'units'),
-        where('orgId', '==', builderOrgId),
-        where('projectId', '==', projectId)
-      ),
-      (s) => setUnits(s.docs.map((d) => d.data() as Unit)),
-      () => setUnits([])
-    );
-    return () => uUnits();
-  }, [builderOrgId, projectId]);
+
+    let cancelled = false;
+    callBackendFunction<any, { units: Array<Record<string, any>> }>(
+      'listPartnerAuthorizedInventory',
+      {
+        orgId: builderOrgId,
+        projectId,
+        partnerOrgId: activePartnerOrg.id,
+      }
+    )
+      .then((res) => {
+        if (!cancelled) setUnits(res.units ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setUnits([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePartnerOrg, builderOrgId, projectId]);
 
   const handleSubmitRegistration = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,15 +170,69 @@ export function PartnerPortalPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-8 space-y-6">
       <PageHeader
-        eyebrow={`Authorized Agency • RERA: ${activePartnerOrg.reraNumber || 'Pending'}`}
+        eyebrow={`Authorized Agency • Regulatory ID: ${activePartnerOrg.reraNumber || 'Pending'}`}
         title={`${activePartnerOrg.companyName} — Partner Portal`}
-        description="View authorized multi-builder inventory, register protected leads, and monitor commission eligibility."
+        description="View authorized multi-builder inventory, ask the scoped AI Assistant about available units, register protected leads, and monitor commissions."
         actions={
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/app/dashboard">Switch Workspace</Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {builderOrgId && (
+              <Button
+                type="button"
+                variant={aiDrawerOpen ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                AI Assistant
+              </Button>
+            )}
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/app/dashboard">Switch Workspace</Link>
+            </Button>
+          </div>
         }
       />
+
+      {/* Multi-Builder & Authorized Project Scope Selector */}
+      <Card>
+        <CardContent className="p-4 flex flex-wrap items-center gap-3">
+          <div className="w-64 space-y-1">
+            <Label className="text-[11px] uppercase text-muted-foreground">
+              Builder / Developer
+            </Label>
+            <Select value={builderOrgId} onValueChange={setBuilderOrgId}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Select Builder" />
+              </SelectTrigger>
+              <SelectContent>
+                {builderOrgs.map((org) => (
+                  <SelectItem key={org.id} value={org.id}>
+                    {org.name} ({org.headquartersCity})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="w-64 space-y-1">
+            <Label className="text-[11px] uppercase text-muted-foreground">
+              Authorized Project
+            </Label>
+            <Select value={projectId} onValueChange={setProjectId}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Select Authorized Project" />
+              </SelectTrigger>
+              <SelectContent>
+                {authorizedProjects.map((proj) => (
+                  <SelectItem key={proj.id} value={proj.id}>
+                    {proj.name} ({proj.code}) — {proj.city}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
 
       {banner && (
         <div className="rounded-lg border border-border bg-secondary px-4 py-2.5 text-xs">
@@ -175,7 +285,7 @@ export function PartnerPortalPage() {
                 <Label>Customer Phone *</Label>
                 <Input required value={custPhone} onChange={(e) => setCustPhone(e.target.value)} />
               </div>
-              <Button type="submit" className="w-full" size="sm">
+              <Button type="submit" className="w-full" size="sm" disabled={!projectId}>
                 Register Protected Lead
               </Button>
             </form>
@@ -200,12 +310,15 @@ export function PartnerPortalPage() {
                 {
                   accessorKey: 'saleableAreaSqft',
                   header: 'Area',
-                  cell: ({ row }) => formatAreaSqft(row.original.saleableAreaSqft),
+                  cell: ({ row }) => formatAreaSqft(row.original.saleableAreaSqft ?? 0),
                 },
                 {
                   accessorKey: 'calculatedTotalPrice',
                   header: 'Indicative Price',
-                  cell: ({ row }) => formatInr(row.original.calculatedTotalPrice),
+                  cell: ({ row }) =>
+                    row.original.calculatedTotalPrice !== undefined
+                      ? formatInr(row.original.calculatedTotalPrice)
+                      : 'Hidden by Builder',
                 },
                 {
                   accessorKey: 'status',
@@ -220,7 +333,9 @@ export function PartnerPortalPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Lead Protection & Commission Status ({registrations.length})</CardTitle>
+          <CardTitle className="text-sm">
+            Lead Protection &amp; Commission Status ({registrations.length})
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <DataTable
@@ -243,6 +358,16 @@ export function PartnerPortalPage() {
           />
         </CardContent>
       </Card>
+
+      {builderOrgId && (
+        <AiAssistantDock
+          partnerContext={{
+            partnerOrgId: activePartnerOrg.id,
+            builderOrgId,
+            projectId: projectId || null,
+          }}
+        />
+      )}
     </div>
   );
 }
