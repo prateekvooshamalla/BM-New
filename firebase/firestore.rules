@@ -341,6 +341,28 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    match /ai_sessions/{sessionId} {
+      allow read: if isSignedIn()
+        && resource.data.uid == request.auth.uid
+        && (
+          hasActiveOrgMembership(resource.data.orgId)
+          || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId))
+        );
+      allow create, update, delete: if false;
+    }
+
+    match /ai_inventory_drafts/{draftId} {
+      allow read: if resource.data.projectId == null
+        ? hasTenantOrgPermission(resource.data.orgId, 'inventory:view')
+        : hasTenantProjectPermission(resource.data.orgId, 'inventory:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
+    match /ai_import_jobs/{jobId} {
+      allow read: if hasTenantProjectPermission(resource.data.orgId, 'inventory:view', resource.data.projectId);
+      allow create, update, delete: if false;
+    }
+
     match /approvals/{approvalId} {
       allow read: if hasOrgPermission(resource.data.orgId, 'approvals:decide')
         || (isSignedIn() && resource.data.requestedByUid == request.auth.uid);

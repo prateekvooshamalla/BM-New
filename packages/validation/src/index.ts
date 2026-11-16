@@ -874,3 +874,5 @@ export const decideApprovalSchema = z.object({
   decision: z.enum(['APPROVED', 'REJECTED']),
   decisionNotes: z.string().min(2, 'Decision notes are required').max(500),
 });
+
+export * from './ai-assistant';

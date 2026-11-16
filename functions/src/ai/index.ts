@@ -4,8 +4,25 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import type { AiFeatureTask, AiUsageLog, Subscription } from '@bharat-makaan/shared';
 import { adminDb } from '../shared/firebase-admin';
-import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
+import {
+  requireAuth,
+  requireOrgPermission,
+  type AuthenticatedActor,
+} from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import { validateOpenAiAccountModels } from './models';
+import { getJobStatusTool } from './tools';
+import {
+  cancelInventoryDraftService,
+  commitApprovedInventoryDraftService,
+  retryImportJobService,
+} from './import-executor';
+import { analyzeFloorPlanDocumentsService } from './document-extraction';
+import {
+  createAiSessionService,
+  sendAiAssistantMessageService,
+  updateAiInventoryDraftService,
+} from './session-service';
 
 const PROMPT_VERSION = 'bm-enterprise-v1.0';
 
@@ -47,6 +64,14 @@ const TASK_INSTRUCTIONS: Record<AiFeatureTask, string> = {
     'Extract key structured fields from the provided document text or metadata.',
   ADMIN_NL_REPORT:
     'Answer the executive natural-language reporting query strictly using the supplied aggregated organization records.',
+  CONVERSATIONAL_ORCHESTRATION:
+    'Coordinate progressive multi-turn real estate CRM and inventory configuration strictly within authorized context.',
+  FLOOR_PLAN_VISION_EXTRACTION:
+    'Extract verifiable floor, unit, BHK, area, and facing fields from architectural floor plans without extrapolating unsupported floors.',
+  DOCUMENT_ESCALATION_EXTRACTION:
+    'Reconcile multi-page architectural tower schedules and layout ambiguities conservatively.',
+  INTENT_CLASSIFICATION:
+    'Classify the user CRM or inventory intent accurately.',
 };
 
 export async function executeAiTaskService(
@@ -230,3 +255,78 @@ export const runAiAssistant = onCall(async (request) => {
 
   return executeAiTaskService(adminDb, actor, input);
 });
+
+// --- Conversational AI Assistant, Floor-Plan Extraction & Staged Inventory Callables ---
+
+export const createAiAssistantSession = onCall(async (request) => {
+  const actor = requireAuth(request);
+  return createAiSessionService(adminDb, actor, request.data);
+});
+
+export const sendAiAssistantMessage = onCall(async (request) => {
+  const actor = requireAuth(request);
+  return sendAiAssistantMessageService(adminDb, actor, request.data);
+});
+
+export const analyzeAiFloorPlanDocuments = onCall(async (request) => {
+  const actor = requireAuth(request);
+  return analyzeFloorPlanDocumentsService(adminDb, actor, request.data);
+});
+
+export const updateAiInventoryDraft = onCall(async (request) => {
+  const actor = requireAuth(request);
+  return updateAiInventoryDraftService(adminDb, actor, request.data);
+});
+
+export const confirmAndCommitAiDraft = onCall(async (request) => {
+  const actor = requireAuth(request);
+  return commitApprovedInventoryDraftService(adminDb, actor, request.data);
+});
+
+export const cancelAiInventoryDraft = onCall(async (request) => {
+  const actor = requireAuth(request);
+  return cancelInventoryDraftService(adminDb, actor, request.data);
+});
+
+export const retryAiImportJob = onCall(async (request) => {
+  const actor = requireAuth(request);
+  const schema = z.object({
+    orgId: z.string().min(1),
+    jobId: z.string().min(1),
+  });
+  const input = schema.parse(request.data);
+  return retryImportJobService({
+    db: adminDb,
+    actor,
+    orgId: input.orgId,
+    jobId: input.jobId,
+  });
+});
+
+export const getAiImportJobStatus = onCall(async (request) => {
+  const actor = requireAuth(request);
+  const schema = z.object({
+    orgId: z.string().min(1),
+    jobId: z.string().min(1),
+  });
+  const input = schema.parse(request.data);
+  return getJobStatusTool({
+    db: adminDb,
+    actor,
+    orgId: input.orgId,
+    jobId: input.jobId,
+  });
+});
+
+export const validateAiModelConfiguration = onCall(async (request) => {
+  const schema = z.object({ orgId: z.string().min(1) });
+  const input = schema.parse(request.data);
+  await requireOrgPermission(request, input.orgId, 'settings:view');
+  return validateOpenAiAccountModels();
+});
+
+export * from './models';
+export * from './tools';
+export * from './import-executor';
+export * from './document-extraction';
+export * from './session-service';

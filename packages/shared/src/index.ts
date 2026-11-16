@@ -14,6 +14,7 @@ export {
 } from '@bharat-makaan/config';
 export * from './permissions';
 export * from './entities';
+export * from './ai-assistant';
 export * from './state-machines';
 export * from './pricing-engine';
 export * from './formatters';
