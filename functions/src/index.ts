@@ -12,3 +12,7 @@ export * from './approvals';
 export * from './pricing';
 export * from './quotations';
 export * from './documents';
+export * from './leads';
+export * from './channel-partners';
+export * from './whatsapp';
+export * from './notifications';
