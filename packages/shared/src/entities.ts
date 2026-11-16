@@ -2,10 +2,21 @@
  * @bharat-makaan/shared — Canonical Domain Entities (All 36 Core Firestore Collections)
  */
 
-import type { SaasPlanCode } from '@bharat-makaan/config';
+import type {
+  AreaUnitCode,
+  CurrencyCode,
+  ProjectStructureTemplateKey,
+  SaasPlanCode,
+} from '@bharat-makaan/config';
 import type { PermissionKey, RoleKey } from './permissions';
 
 export type ISODateString = string;
+
+export type OrganizationType =
+  | 'BUILDER'
+  | 'DEVELOPER'
+  | 'REAL_ESTATE_AGENCY'
+  | 'ENTERPRISE_GROUP';
 
 // 1. organizations
 export interface Organization {
@@ -13,6 +24,16 @@ export interface Organization {
   name: string;
   slug: string;
   legalName: string;
+  organizationType?: OrganizationType;
+  countryCode?: string;
+  stateOrRegion?: string;
+  defaultCurrency?: CurrencyCode;
+  defaultAreaUnit?: AreaUnitCode;
+  defaultTimezone?: string;
+  taxRegistrationLabel?: string;
+  taxRegistrationNumber?: string;
+  regulatoryAuthorityLabel?: string;
+  regulatoryRegistrationNumber?: string;
   gstin?: string;
   pan?: string;
   reraNumber?: string;
@@ -21,6 +42,24 @@ export interface Organization {
   phone?: string;
   email?: string;
   logoUrl?: string;
+  branding?: {
+    primaryColor?: string;
+    accentColor?: string;
+    logoUrl?: string;
+    quotationFooterText?: string;
+  };
+  taxRegime?: {
+    primaryTaxLabel: string;
+    primaryTaxPct: number;
+    secondaryTaxLabel: string;
+    secondaryTaxPct: number;
+    exemptLabel: string;
+  };
+  defaultPricingRules?: {
+    maxDiscountPctWithoutApproval?: number;
+    floorRiseStartFloor?: number;
+    floorRiseRatePerUnitArea?: number;
+  };
   status: 'ACTIVE' | 'SUSPENDED';
   subscriptionPlanId: SaasPlanCode;
   leadProtectionDays: number; // Configurable lead protection window for channel partners
@@ -53,13 +92,33 @@ export interface OrganizationMember {
 }
 
 // 3. projects
-export type ProjectType = 'APARTMENT' | 'VILLA' | 'PLOTTED' | 'COMMERCIAL' | 'MIXED';
+export type ProjectType =
+  | 'APARTMENT'
+  | 'VILLA'
+  | 'INDEPENDENT_HOUSE'
+  | 'PLOTTED'
+  | 'COMMERCIAL'
+  | 'OFFICE'
+  | 'RETAIL'
+  | 'MIXED'
+  | 'RESALE_PORTFOLIO'
+  | 'RENTAL_PORTFOLIO';
+
 export type ConstructionStatus =
   | 'PRE_LAUNCH'
   | 'NEW_LAUNCH'
   | 'UNDER_CONSTRUCTION'
   | 'NEARING_POSSESSION'
   | 'READY_TO_MOVE';
+
+export interface ProjectHierarchyLabels {
+  phaseLabel: string;
+  structureLabel: string;
+  floorLabel: string;
+  unitLabel: string;
+  requiresStructure: boolean;
+  requiresFloor: boolean;
+}
 
 export interface ProjectStats {
   totalUnits: number;
@@ -82,13 +141,22 @@ export interface Project {
   builderName: string;
   name: string;
   code: string;
+  countryCode?: string;
+  stateOrRegion?: string;
   city: string;
   locality: string;
   address: string;
   coordinates?: { lat: number; lng: number };
+  currencyCode?: CurrencyCode;
+  areaUnit?: AreaUnitCode;
+  timezone?: string;
   projectType: ProjectType;
+  structureTemplate?: ProjectStructureTemplateKey;
+  hierarchyLabels?: ProjectHierarchyLabels;
+  regulatoryAuthorityLabel?: string;
   reraNumber: string;
   reraValidUntil?: ISODateString;
+  defaultCostSheetTemplateId?: string | null;
   landAreaAcres?: number;
   totalPhases: number;
   totalTowers: number;
@@ -128,8 +196,15 @@ export interface ProjectPhase {
   createdAt: ISODateString;
 }
 
-// 5. towers
-export type TowerKind = 'TOWER' | 'BLOCK' | 'SECTOR' | 'VILLA_CLUSTER';
+// 5. towers (generic structures: towers, blocks, buildings, sectors, villa clusters, communities)
+export type TowerKind =
+  | 'TOWER'
+  | 'BLOCK'
+  | 'BUILDING'
+  | 'SECTOR'
+  | 'VILLA_CLUSTER'
+  | 'COMMUNITY'
+  | 'RETAIL_WING';
 
 export interface Tower {
   id: string;
@@ -179,7 +254,20 @@ export type UnitStatus =
   | 'AGREEMENT'
   | 'REGISTERED';
 
-export type UnitType = 'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE';
+export type UnitType =
+  | 'APARTMENT'
+  | 'PENTHOUSE'
+  | 'VILLA'
+  | 'INDEPENDENT_HOUSE'
+  | 'PLOT'
+  | 'SHOP'
+  | 'RETAIL_SPACE'
+  | 'OFFICE'
+  | 'COMMERCIAL_UNIT';
+
+export type InventorySource = 'PRIMARY_DEVELOPER' | 'RESALE' | 'RENTAL_MANAGED';
+export type UnitPricingMode = 'PER_AREA' | 'BASE_UNIT_PRICE';
+
 export type FacingDirection =
   | 'EAST'
   | 'WEST'
@@ -199,9 +287,14 @@ export interface Unit {
   towerName?: string;
   floorId?: string | null;
   floorNumber: number; // 0 for plots/villas without apartment floors
-  unitNumber: string; // e.g., "C-704"
+  unitNumber: string;
   unitType: UnitType;
-  bhk: string; // e.g., "3 BHK", "4 BHK", "PLOT"
+  inventorySource?: InventorySource;
+  bhk: string; // e.g., "3 BHK", "4 BHK", "Villa", "Plot", "Grade-A Office"
+  currencyCode?: CurrencyCode;
+  areaUnit?: AreaUnitCode;
+  primaryArea?: number;
+  secondaryArea?: number;
   saleableAreaSqft: number;
   carpetAreaSqft: number;
   plotAreaSqft?: number;
@@ -211,11 +304,14 @@ export interface Unit {
   balconiesCount: number;
   parkingEntitlementCount: number; // Entitlement count (distinct from physical assigned slots)
   assignedParkingSlotIds: string[]; // Physical parking slot IDs allocated
+  pricingMode?: UnitPricingMode;
+  baseUnitPrice?: number;
   baseRatePerSqft: number;
   activePriceBookId?: string;
   floorRiseAmount: number;
   premiumChargesAmount: number;
   calculatedTotalPrice: number;
+  calculatedTotalMinor?: number;
   status: UnitStatus;
   holdExpiresAt?: ISODateString | null;
   heldByUid?: string | null;
@@ -223,7 +319,7 @@ export interface Unit {
   activeBookingId?: string | null;
   floorPlanVersionId?: string | null;
   isPublicPublished: boolean;
-  listingMode: 'BUY' | 'RENT';
+  listingMode: 'BUY' | 'RENT' | 'LEASE';
   monthlyRentInr?: number;
   securityDepositInr?: number;
   createdAt: ISODateString;
@@ -307,13 +403,18 @@ export type PriceBookStatus =
 export type ChargeCalculationBasis =
   | 'PER_SQFT_SALEABLE'
   | 'PER_SQFT_CARPET'
+  | 'PER_PRIMARY_AREA'
+  | 'PER_SECONDARY_AREA'
   | 'FIXED_AMOUNT'
   | 'PERCENTAGE_OF_BASE';
 
 export type TaxApplicabilityCategory =
-  | 'AGREEMENT_GST' // Standard residential GST (e.g., 5% or 1% affordable) or commercial GST (12%)
-  | 'OTHER_SERVICE_GST' // Separate service GST (e.g., 18% on maintenance / legal)
-  | 'EXEMPT_CORPUS'; // 0% GST (e.g., Corpus / Sinking fund deposit)
+  | 'AGREEMENT_GST' // Primary agreement tax (e.g., GST, VAT, Transfer Tax)
+  | 'OTHER_SERVICE_GST' // Secondary service tax (e.g., Service GST / VAT)
+  | 'EXEMPT_CORPUS' // 0% exempt (e.g., Corpus / Sinking fund deposit)
+  | 'PRIMARY_TAX'
+  | 'SECONDARY_TAX'
+  | 'EXEMPT';
 
 export interface CostSheetLineItemRule {
   id: string;
@@ -321,7 +422,7 @@ export interface CostSheetLineItemRule {
   displayLabel: string; // Editable builder label (e.g. "Amenities & Infrastructure Development Charges")
   description?: string;
   basis: ChargeCalculationBasis;
-  amount: number; // Rate per sqft, fixed INR, or percentage
+  amount: number; // Rate per area, fixed currency amount, or percentage
   taxCategory: TaxApplicabilityCategory;
   applicableUnitTypes?: UnitType[];
   applicableBhk?: string[];
@@ -339,10 +440,106 @@ export interface FloorRiseRule {
 }
 
 export interface TaxConfiguration {
-  agreementGstPct: number; // e.g., 5
-  otherServiceGstPct: number; // e.g., 18
-  roundingMode: 'NEAREST_RUPEE' | 'EXACT_PAISE';
+  agreementGstPct: number; // Primary tax percentage (e.g., 5% GST, 0% VAT, 1.5% Transfer Tax)
+  otherServiceGstPct: number; // Secondary/service tax percentage (e.g., 18% GST, 5% VAT)
+  primaryTaxLabel?: string; // e.g., "GST", "VAT", "Transfer Tax", "Stamp Duty"
+  secondaryTaxLabel?: string; // e.g., "Service GST", "Service VAT"
+  exemptTaxLabel?: string; // e.g., "Tax Exempt"
+  roundingMode: 'NEAREST_RUPEE' | 'EXACT_PAISE' | 'NEAREST_UNIT' | 'MINOR_UNIT';
   registrationDisclaimer: string;
+}
+
+export interface PromotionalOfferRule {
+  id: string;
+  code: string;
+  label: string;
+  offerType: 'PERCENTAGE_REBATE' | 'FIXED_REBATE' | 'FLOOR_RISE_WAIVER' | 'PARKING_WAIVER';
+  value: number;
+  isActive: boolean;
+  validUntil?: ISODateString | null;
+}
+
+export type PricingScopeLevel =
+  | 'ORGANIZATION'
+  | 'PROJECT'
+  | 'PHASE'
+  | 'STRUCTURE'
+  | 'UNIT_TYPE'
+  | 'UNIT';
+
+export interface PricingScopeOverride {
+  id: string;
+  orgId: string;
+  projectId?: string | null;
+  scopeLevel: PricingScopeLevel;
+  targetId: string; // orgId, projectId, phaseId, towerId, unitType/bhk, or unitId
+  label?: string;
+  versionNumber: number;
+  isActive: boolean;
+  currencyCode?: CurrencyCode;
+  areaUnit?: AreaUnitCode;
+  pricingMode?: UnitPricingMode;
+  basePricePerArea?: number;
+  baseUnitPrice?: number;
+  baseConsiderationLabel?: string;
+  floorRise?: Partial<FloorRiseRule>;
+  facingPremiumPerSqft?: Partial<Record<FacingDirection, number>>;
+  viewPremiumPerSqft?: Record<string, number>;
+  cornerPremiumPerSqft?: number;
+  locationPremiumPerSqft?: number;
+  parkingPricesByType?: Partial<Record<ParkingSlotType, number>>;
+  lineItemsOverride?: CostSheetLineItemRule[];
+  taxConfigOverride?: Partial<TaxConfiguration>;
+  maxDiscountPctWithoutApproval?: number;
+  offers?: PromotionalOfferRule[];
+  effectiveFrom: ISODateString;
+  createdByUid: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface CostSheetTemplate {
+  id: string;
+  orgId: string;
+  projectId?: string | null; // null = reusable org-wide template; projectId = project-specific template
+  name: string;
+  code: string;
+  isDefault: boolean;
+  headerConfig: {
+    title: string;
+    subtitle?: string;
+    showOrgLogo: boolean;
+    showRegulatoryNumber: boolean;
+    accentColor: string;
+  };
+  sectionToggles: {
+    showCustomerSection: boolean;
+    showUnitSection: boolean;
+    showAreaBreakdown: boolean;
+    showParkingBreakdown: boolean;
+    showTaxBreakdown: boolean;
+    showOfferRebates: boolean;
+    showPaymentSchedule: boolean;
+    showTerms: boolean;
+    showSalesRepSection: boolean;
+    showSignatureBlocks: boolean;
+  };
+  customLabels: {
+    unitSectionTitle: string;
+    customerSectionTitle: string;
+    pricingTableTitle: string;
+    primaryTaxSummaryLabel: string;
+    secondaryTaxSummaryLabel: string;
+    exemptSummaryLabel: string;
+    netConsiderationLabel: string;
+    grandTotalLabel: string;
+    scheduleSectionTitle: string;
+  };
+  defaultTermsAndConditions: string;
+  footerText: string;
+  createdByUid: string;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
 }
 
 export interface PriceBook {
@@ -357,6 +554,13 @@ export interface PriceBook {
   isImmutable: boolean;
   effectiveFrom: ISODateString;
   expiresAt?: ISODateString | null;
+  currencyCode?: CurrencyCode;
+  areaUnit?: AreaUnitCode;
+  pricingMode?: UnitPricingMode;
+  baseUnitPrice?: number;
+  baseConsiderationLabel?: string;
+  floorRiseLabel?: string;
+  parkingLabel?: string;
   basePricePerSqft: number;
   floorRise: FloorRiseRule;
   facingPremiumPerSqft: Partial<Record<FacingDirection, number>>;
@@ -367,6 +571,7 @@ export interface PriceBook {
   parkingPricesByType: Record<ParkingSlotType, number>;
   lineItems: CostSheetLineItemRule[];
   taxConfig: TaxConfiguration;
+  offers?: PromotionalOfferRule[];
   maxDiscountPctWithoutApproval: number;
   defaultPaymentPlanId?: string | null;
   internalNotes?: string;
@@ -461,6 +666,11 @@ export interface ComputedMilestoneInstallment {
 }
 
 export interface CostSheetBreakdown {
+  currencyCode?: CurrencyCode;
+  areaUnit?: AreaUnitCode;
+  pricingMode?: UnitPricingMode;
+  primaryTaxLabel?: string;
+  secondaryTaxLabel?: string;
   saleableAreaSqft: number;
   carpetAreaSqft: number;
   baseRatePerSqft: number;
@@ -473,17 +683,26 @@ export interface CostSheetBreakdown {
   unitSpecificPremiumInr: number;
   parkingChargesInr: number;
   grossAgreementComponentsInr: number;
+  offerDiscountInr?: number;
+  appliedOfferCodes?: string[];
   discountAmountInr: number;
   discountEffectivePct: number;
   requiresDiscountApproval: boolean;
-  netAgreementValueBeforeGstInr: number; // Consideration value subject to Agreement GST (e.g. 5%)
+  netAgreementValueBeforeGstInr: number; // Consideration value subject to primary tax
   agreementGstInr: number;
-  otherServiceChargesBeforeGstInr: number; // Subject to Service GST (e.g. 18%)
+  otherServiceChargesBeforeGstInr: number; // Subject to secondary/service tax
   otherServiceGstInr: number;
-  exemptCorpusChargesInr: number; // 0% GST
+  exemptCorpusChargesInr: number; // 0% exempt
   totalBeforeTaxInr: number;
   totalGstInr: number;
-  totalPayableInr: number; // Final payable INR
+  totalPayableInr: number; // Final payable amount in project currency
+  totalPayableMinor?: number;
+  appliedOverrideChain?: Array<{
+    scopeLevel: PricingScopeLevel;
+    overrideId: string;
+    targetId: string;
+    versionNumber: number;
+  }>;
   lineItems: ComputedLineItem[];
   schedule: ComputedMilestoneInstallment[];
   registrationDisclaimer: string;
@@ -509,6 +728,10 @@ export interface Quotation {
     | 'SUPERSEDED';
   leadId?: string | null;
   partnerOrgId?: string | null;
+  currencyCode?: CurrencyCode;
+  areaUnit?: AreaUnitCode;
+  costSheetTemplateId?: string | null;
+  appliedOfferCodes?: string[];
   customer: {
     name: string;
     phone: string;
@@ -586,6 +809,8 @@ export type LeadSource =
 export interface Lead {
   id: string;
   orgId: string;
+  projectId?: string | null;
+  currencyCode?: CurrencyCode;
   customerName: string;
   phone: string;
   normalizedPhone: string;

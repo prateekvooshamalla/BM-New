@@ -1,23 +1,82 @@
 /**
- * @bharat-makaan/validation — Shared Zod Schemas for Web, Mobile & Cloud Functions
+ * @bharat-makaan/validation — Shared Global Multi-Project Zod Schemas for Web, Mobile & Cloud Functions
  */
 
 import { z } from 'zod';
-import { PERMISSIONS, ROLES } from '@bharat-makaan/shared';
+import {
+  PERMISSIONS,
+  PROJECT_STRUCTURE_TEMPLATE_KEYS,
+  ROLES,
+  SUPPORTED_AREA_UNITS,
+  SUPPORTED_CURRENCY_CODES,
+} from '@bharat-makaan/shared';
 
 export const roleKeySchema = z.enum(ROLES);
 export const permissionKeySchema = z.enum(PERMISSIONS);
+export const currencyCodeSchema = z.enum(SUPPORTED_CURRENCY_CODES);
+export const areaUnitSchema = z.enum(SUPPORTED_AREA_UNITS);
+export const projectStructureTemplateSchema = z.enum(PROJECT_STRUCTURE_TEMPLATE_KEYS);
 
-export const indianPhoneSchema = z
+export const globalPhoneSchema = z
   .string()
-  .min(10, 'Enter a valid 10-digit phone number')
-  .max(16, 'Phone number is too long')
-  .regex(/^[+\d][\d\s-]{8,15}$/, 'Invalid phone number format');
+  .min(7, 'Enter a valid phone number')
+  .max(22, 'Phone number is too long')
+  .regex(/^[+\d][\d\s()-]{6,21}$/, 'Invalid phone number format');
+
+// Retained alias for backward compatibility across existing modules
+export const indianPhoneSchema = globalPhoneSchema;
+
+export const projectTypeSchema = z.enum([
+  'APARTMENT',
+  'VILLA',
+  'INDEPENDENT_HOUSE',
+  'PLOTTED',
+  'COMMERCIAL',
+  'OFFICE',
+  'RETAIL',
+  'MIXED',
+  'RESALE_PORTFOLIO',
+  'RENTAL_PORTFOLIO',
+]);
+
+export const unitTypeSchema = z.enum([
+  'APARTMENT',
+  'PENTHOUSE',
+  'VILLA',
+  'INDEPENDENT_HOUSE',
+  'PLOT',
+  'SHOP',
+  'RETAIL_SPACE',
+  'OFFICE',
+  'COMMERCIAL_UNIT',
+]);
+
+export const towerTypeSchema = z.enum([
+  'TOWER',
+  'BLOCK',
+  'BUILDING',
+  'SECTOR',
+  'VILLA_CLUSTER',
+  'COMMUNITY',
+  'RETAIL_WING',
+]);
 
 // --- Organization & Staff Management ---
 export const createOrganizationSchema = z.object({
-  name: z.string().min(2, 'Builder / Organization name is required').max(120),
+  name: z.string().min(2, 'Builder / Agency / Organization name is required').max(120),
   legalName: z.string().min(2, 'Registered legal name is required').max(160),
+  organizationType: z
+    .enum(['BUILDER', 'DEVELOPER', 'REAL_ESTATE_AGENCY', 'ENTERPRISE_GROUP'])
+    .default('BUILDER'),
+  countryCode: z.string().min(2).max(3).default('IN'),
+  stateOrRegion: z.string().max(80).optional(),
+  defaultCurrency: currencyCodeSchema.default('INR'),
+  defaultAreaUnit: areaUnitSchema.default('SQFT'),
+  defaultTimezone: z.string().max(80).default('Asia/Kolkata'),
+  taxRegistrationLabel: z.string().max(40).optional(),
+  taxRegistrationNumber: z.string().max(80).optional().or(z.literal('')),
+  regulatoryAuthorityLabel: z.string().max(60).optional(),
+  regulatoryRegistrationNumber: z.string().max(100).optional().or(z.literal('')),
   gstin: z
     .string()
     .regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, 'Invalid GSTIN format')
@@ -28,19 +87,62 @@ export const createOrganizationSchema = z.object({
     .regex(/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/, 'Invalid PAN format')
     .optional()
     .or(z.literal('')),
-  reraNumber: z.string().max(80).optional().or(z.literal('')),
+  reraNumber: z.string().max(100).optional().or(z.literal('')),
   headquartersCity: z.string().min(2, 'Headquarters city is required').max(80),
   address: z.string().max(300).optional(),
-  phone: indianPhoneSchema.optional().or(z.literal('')),
+  phone: globalPhoneSchema.optional().or(z.literal('')),
   email: z.string().email('Valid official email required').optional().or(z.literal('')),
   leadProtectionDays: z.coerce.number().int().min(1).max(365).default(60),
+});
+
+export const updateOrganizationSettingsSchema = z.object({
+  orgId: z.string().min(1),
+  organizationType: z
+    .enum(['BUILDER', 'DEVELOPER', 'REAL_ESTATE_AGENCY', 'ENTERPRISE_GROUP'])
+    .optional(),
+  countryCode: z.string().min(2).max(3).optional(),
+  stateOrRegion: z.string().max(80).optional(),
+  defaultCurrency: currencyCodeSchema.optional(),
+  defaultAreaUnit: areaUnitSchema.optional(),
+  defaultTimezone: z.string().max(80).optional(),
+  taxRegistrationLabel: z.string().max(40).optional(),
+  taxRegistrationNumber: z.string().max(80).optional(),
+  regulatoryAuthorityLabel: z.string().max(60).optional(),
+  regulatoryRegistrationNumber: z.string().max(100).optional(),
+  leadProtectionDays: z.coerce.number().int().min(1).max(365).optional(),
+  whatsappAutoSendAi: z.boolean().optional(),
+  branding: z
+    .object({
+      primaryColor: z.string().max(20).optional(),
+      accentColor: z.string().max(20).optional(),
+      logoUrl: z.string().max(500).optional(),
+      quotationFooterText: z.string().max(500).optional(),
+    })
+    .optional(),
+  taxRegime: z
+    .object({
+      primaryTaxLabel: z.string().min(1).max(40),
+      primaryTaxPct: z.coerce.number().min(0).max(100),
+      secondaryTaxLabel: z.string().min(1).max(40),
+      secondaryTaxPct: z.coerce.number().min(0).max(100),
+      exemptLabel: z.string().min(1).max(40),
+    })
+    .optional(),
+});
+
+export const superAdminInspectOrganizationSchema = z.object({
+  orgId: z.string().min(1),
+  reason: z
+    .string()
+    .min(10, 'Explicit support/audit justification of at least 10 characters is required')
+    .max(500),
 });
 
 export const inviteStaffMemberSchema = z.object({
   orgId: z.string().min(1),
   email: z.string().email('Enter a valid employee email address'),
   displayName: z.string().min(2, 'Employee name is required').max(100),
-  phone: indianPhoneSchema.optional().or(z.literal('')),
+  phone: globalPhoneSchema.optional().or(z.literal('')),
   role: roleKeySchema,
   permissions: z.array(permissionKeySchema).min(1, 'Select at least one permission'),
   assignedProjectIds: z.array(z.string()).default([]),
@@ -70,13 +172,15 @@ export const transferLeadsSchema = z.object({
 // --- Projects, Phases, Towers, Floors & Units ---
 export const createProjectSchema = z.object({
   orgId: z.string().min(1),
-  builderName: z.string().min(2, 'Builder brand name is required').max(120),
+  builderName: z.string().min(2, 'Builder / Agency brand name is required').max(120),
   name: z.string().min(2, 'Project name is required').max(120),
   code: z
     .string()
     .min(2, 'Project code is required')
     .max(20)
     .regex(/^[A-Z0-9_-]+$/i, 'Use alphanumeric characters, hyphens or underscores'),
+  countryCode: z.string().min(2).max(3).default('IN'),
+  stateOrRegion: z.string().max(80).optional(),
   city: z.string().min(2, 'City is required').max(80),
   locality: z.string().min(2, 'Locality / micro-market is required').max(120),
   address: z.string().min(5, 'Full project address is required').max(300),
@@ -86,9 +190,25 @@ export const createProjectSchema = z.object({
       lng: z.coerce.number().min(-180).max(180),
     })
     .optional(),
-  projectType: z.enum(['APARTMENT', 'VILLA', 'PLOTTED', 'COMMERCIAL', 'MIXED']),
-  reraNumber: z.string().min(3, 'RERA registration number is required').max(100),
+  currencyCode: currencyCodeSchema.optional(),
+  areaUnit: areaUnitSchema.optional(),
+  timezone: z.string().max(80).optional(),
+  projectType: projectTypeSchema,
+  structureTemplate: projectStructureTemplateSchema.optional(),
+  hierarchyLabels: z
+    .object({
+      phaseLabel: z.string().min(1).max(40),
+      structureLabel: z.string().min(1).max(40),
+      floorLabel: z.string().min(1).max(40),
+      unitLabel: z.string().min(1).max(40),
+      requiresStructure: z.boolean(),
+      requiresFloor: z.boolean(),
+    })
+    .optional(),
+  regulatoryAuthorityLabel: z.string().max(60).optional(),
+  reraNumber: z.string().min(2, 'Regulatory / permit registration ID is required').max(100),
   reraValidUntil: z.string().optional(),
+  defaultCostSheetTemplateId: z.string().nullable().optional(),
   landAreaAcres: z.coerce.number().positive().optional(),
   configurations: z.array(z.string()).min(1, 'Specify at least one configuration'),
   amenities: z.array(z.string()).default([]),
@@ -125,13 +245,13 @@ export const createTowerSchema = z.object({
   orgId: z.string().min(1),
   projectId: z.string().min(1),
   phaseId: z.string().nullable().optional(),
-  name: z.string().min(1, 'Tower/Block name is required').max(80),
-  code: z.string().min(1, 'Tower code is required').max(20),
-  towerType: z.enum(['TOWER', 'BLOCK', 'SECTOR', 'VILLA_CLUSTER']),
-  totalFloors: z.coerce.number().int().min(0).max(150),
-  basementLevels: z.coerce.number().int().min(0).max(10).default(1),
-  podiumLevels: z.coerce.number().int().min(0).max(10).default(0),
-  unitsPerFloorTypical: z.coerce.number().int().min(1).max(50).default(4),
+  name: z.string().min(1, 'Structure / Building / Sector name is required').max(80),
+  code: z.string().min(1, 'Structure code is required').max(20),
+  towerType: towerTypeSchema,
+  totalFloors: z.coerce.number().int().min(0).max(200),
+  basementLevels: z.coerce.number().int().min(0).max(15).default(1),
+  podiumLevels: z.coerce.number().int().min(0).max(15).default(0),
+  unitsPerFloorTypical: z.coerce.number().int().min(1).max(100).default(4),
 });
 
 export const createFloorSchema = z.object({
@@ -139,7 +259,7 @@ export const createFloorSchema = z.object({
   projectId: z.string().min(1),
   phaseId: z.string().nullable().optional(),
   towerId: z.string().min(1),
-  floorNumber: z.coerce.number().int().min(-10).max(150),
+  floorNumber: z.coerce.number().int().min(-15).max(200),
   label: z.string().min(1).max(60),
   floorCategory: z.enum([
     'PODIUM',
@@ -160,12 +280,19 @@ export const createUnitSchema = z
     towerId: z.string().nullable().optional(),
     towerName: z.string().optional(),
     floorId: z.string().nullable().optional(),
-    floorNumber: z.coerce.number().int().min(0).max(150).default(0),
-    unitNumber: z.string().min(1, 'Unit / Plot number is required').max(40),
-    unitType: z.enum(['APARTMENT', 'PENTHOUSE', 'VILLA', 'PLOT', 'SHOP', 'OFFICE']),
-    bhk: z.string().min(1, 'BHK / Configuration is required').max(40),
-    saleableAreaSqft: z.coerce.number().positive('Saleable area must be positive'),
-    carpetAreaSqft: z.coerce.number().positive('Carpet area must be positive'),
+    floorNumber: z.coerce.number().int().min(-10).max(200).default(0),
+    unitNumber: z.string().min(1, 'Unit / Villa / Plot / Office identifier is required').max(40),
+    unitType: unitTypeSchema,
+    inventorySource: z
+      .enum(['PRIMARY_DEVELOPER', 'RESALE', 'RENTAL_MANAGED'])
+      .default('PRIMARY_DEVELOPER'),
+    bhk: z.string().min(1, 'Configuration / Layout type is required').max(40),
+    currencyCode: currencyCodeSchema.optional(),
+    areaUnit: areaUnitSchema.optional(),
+    primaryArea: z.coerce.number().positive().optional(),
+    secondaryArea: z.coerce.number().positive().optional(),
+    saleableAreaSqft: z.coerce.number().positive('Primary / Saleable area must be positive'),
+    carpetAreaSqft: z.coerce.number().positive('Carpet / Net usable area must be positive'),
     plotAreaSqft: z.coerce.number().positive().optional(),
     facing: z.enum([
       'EAST',
@@ -179,15 +306,17 @@ export const createUnitSchema = z
     ]),
     viewType: z.string().max(60).optional(),
     isCorner: z.boolean().default(false),
-    balconiesCount: z.coerce.number().int().min(0).max(10).default(1),
-    parkingEntitlementCount: z.coerce.number().int().min(0).max(10).default(1),
+    balconiesCount: z.coerce.number().int().min(0).max(20).default(1),
+    parkingEntitlementCount: z.coerce.number().int().min(0).max(50).default(1),
+    pricingMode: z.enum(['PER_AREA', 'BASE_UNIT_PRICE']).default('PER_AREA'),
+    baseUnitPrice: z.coerce.number().nonnegative().optional(),
     baseRatePerSqft: z.coerce.number().nonnegative('Base rate must be >= 0'),
-    listingMode: z.enum(['BUY', 'RENT']).default('BUY'),
+    listingMode: z.enum(['BUY', 'RENT', 'LEASE']).default('BUY'),
     monthlyRentInr: z.coerce.number().nonnegative().optional(),
     isPublicPublished: z.boolean().default(false),
   })
   .refine((u) => u.carpetAreaSqft <= u.saleableAreaSqft, {
-    message: 'Carpet area cannot exceed saleable area',
+    message: 'Usable / carpet area cannot exceed primary / saleable area',
     path: ['carpetAreaSqft'],
   });
 
@@ -248,7 +377,22 @@ export const swapParkingSlotsSchema = z.object({
   reason: z.string().min(3, 'Swap reason is required').max(200),
 });
 
-// --- Dynamic Pricing Engine ---
+// --- Dynamic Global Pricing Engine & Cost-Sheet Templates ---
+export const promotionalOfferRuleSchema = z.object({
+  id: z.string().min(1),
+  code: z.string().min(2).max(40),
+  label: z.string().min(2).max(120),
+  offerType: z.enum([
+    'PERCENTAGE_REBATE',
+    'FIXED_REBATE',
+    'FLOOR_RISE_WAIVER',
+    'PARKING_WAIVER',
+  ]),
+  value: z.coerce.number().nonnegative(),
+  isActive: z.boolean().default(true),
+  validUntil: z.string().nullable().optional(),
+});
+
 export const costSheetLineItemRuleSchema = z.object({
   id: z.string().min(1),
   internalKey: z
@@ -258,12 +402,24 @@ export const costSheetLineItemRuleSchema = z.object({
     .regex(/^[a-z0-9_]+$/, 'Internal key must be lowercase snake_case'),
   displayLabel: z.string().min(2, 'Line item label is required').max(140),
   description: z.string().max(250).optional(),
-  basis: z.enum(['PER_SQFT_SALEABLE', 'PER_SQFT_CARPET', 'FIXED_AMOUNT', 'PERCENTAGE_OF_BASE']),
+  basis: z.enum([
+    'PER_SQFT_SALEABLE',
+    'PER_SQFT_CARPET',
+    'PER_PRIMARY_AREA',
+    'PER_SECONDARY_AREA',
+    'FIXED_AMOUNT',
+    'PERCENTAGE_OF_BASE',
+  ]),
   amount: z.coerce.number().nonnegative(),
-  taxCategory: z.enum(['AGREEMENT_GST', 'OTHER_SERVICE_GST', 'EXEMPT_CORPUS']),
-  applicableUnitTypes: z
-    .array(z.enum(['APARTMENT', 'PENTHOUSE', 'VILLA', 'PLOT', 'SHOP', 'OFFICE']))
-    .optional(),
+  taxCategory: z.enum([
+    'AGREEMENT_GST',
+    'OTHER_SERVICE_GST',
+    'EXEMPT_CORPUS',
+    'PRIMARY_TAX',
+    'SECONDARY_TAX',
+    'EXEMPT',
+  ]),
+  applicableUnitTypes: z.array(unitTypeSchema).optional(),
   applicableBhk: z.array(z.string()).optional(),
   isOptional: z.boolean().default(false),
   isVisible: z.boolean().default(true),
@@ -279,10 +435,17 @@ export const upsertPriceBookSchema = z.object({
   description: z.string().max(400).optional(),
   effectiveFrom: z.string().min(1, 'Effective date is required'),
   expiresAt: z.string().nullable().optional(),
-  basePricePerSqft: z.coerce.number().positive('Base price per sq. ft. must be > 0'),
+  currencyCode: currencyCodeSchema.optional(),
+  areaUnit: areaUnitSchema.optional(),
+  pricingMode: z.enum(['PER_AREA', 'BASE_UNIT_PRICE']).optional(),
+  baseUnitPrice: z.coerce.number().nonnegative().optional(),
+  baseConsiderationLabel: z.string().max(120).optional(),
+  floorRiseLabel: z.string().max(120).optional(),
+  parkingLabel: z.string().max(120).optional(),
+  basePricePerSqft: z.coerce.number().nonnegative('Base price per area unit must be >= 0'),
   floorRise: z.object({
     enabled: z.boolean(),
-    startFloor: z.coerce.number().int().min(0).max(150),
+    startFloor: z.coerce.number().int().min(0).max(200),
     ratePerFloorPerSqft: z.coerce.number().nonnegative(),
   }),
   facingPremiumPerSqft: z.record(z.string(), z.coerce.number().nonnegative()).default({}),
@@ -299,14 +462,108 @@ export const upsertPriceBookSchema = z.object({
   }),
   lineItems: z.array(costSheetLineItemRuleSchema),
   taxConfig: z.object({
-    agreementGstPct: z.coerce.number().min(0).max(28),
-    otherServiceGstPct: z.coerce.number().min(0).max(28),
-    roundingMode: z.enum(['NEAREST_RUPEE', 'EXACT_PAISE']),
+    agreementGstPct: z.coerce.number().min(0).max(100),
+    otherServiceGstPct: z.coerce.number().min(0).max(100),
+    primaryTaxLabel: z.string().max(60).optional(),
+    secondaryTaxLabel: z.string().max(60).optional(),
+    exemptTaxLabel: z.string().max(60).optional(),
+    roundingMode: z.enum(['NEAREST_RUPEE', 'EXACT_PAISE', 'NEAREST_UNIT', 'MINOR_UNIT']),
     registrationDisclaimer: z.string().min(5).max(500),
   }),
-  maxDiscountPctWithoutApproval: z.coerce.number().min(0).max(50).default(2),
+  offers: z.array(promotionalOfferRuleSchema).optional(),
+  maxDiscountPctWithoutApproval: z.coerce.number().min(0).max(100).default(2),
   defaultPaymentPlanId: z.string().nullable().optional(),
   internalNotes: z.string().max(1000).optional(),
+});
+
+export const savePricingScopeOverrideSchema = z.object({
+  orgId: z.string().min(1),
+  projectId: z.string().nullable().optional(),
+  overrideId: z.string().optional(),
+  scopeLevel: z.enum(['ORGANIZATION', 'PROJECT', 'PHASE', 'STRUCTURE', 'UNIT_TYPE', 'UNIT']),
+  targetId: z.string().min(1, 'Target scope identifier is required'),
+  label: z.string().max(120).optional(),
+  isActive: z.boolean().default(true),
+  effectiveFrom: z.string().min(1),
+  currencyCode: currencyCodeSchema.optional(),
+  areaUnit: areaUnitSchema.optional(),
+  pricingMode: z.enum(['PER_AREA', 'BASE_UNIT_PRICE']).optional(),
+  basePricePerArea: z.coerce.number().nonnegative().optional(),
+  baseUnitPrice: z.coerce.number().nonnegative().optional(),
+  baseConsiderationLabel: z.string().max(120).optional(),
+  floorRise: z
+    .object({
+      enabled: z.boolean().optional(),
+      startFloor: z.coerce.number().int().min(0).max(200).optional(),
+      ratePerFloorPerSqft: z.coerce.number().nonnegative().optional(),
+    })
+    .optional(),
+  facingPremiumPerSqft: z.record(z.string(), z.coerce.number().nonnegative()).optional(),
+  viewPremiumPerSqft: z.record(z.string(), z.coerce.number().nonnegative()).optional(),
+  cornerPremiumPerSqft: z.coerce.number().nonnegative().optional(),
+  locationPremiumPerSqft: z.coerce.number().nonnegative().optional(),
+  parkingPricesByType: z.record(z.string(), z.coerce.number().nonnegative()).optional(),
+  lineItemsOverride: z.array(costSheetLineItemRuleSchema).optional(),
+  taxConfigOverride: z
+    .object({
+      agreementGstPct: z.coerce.number().min(0).max(100).optional(),
+      otherServiceGstPct: z.coerce.number().min(0).max(100).optional(),
+      primaryTaxLabel: z.string().max(60).optional(),
+      secondaryTaxLabel: z.string().max(60).optional(),
+      exemptTaxLabel: z.string().max(60).optional(),
+      roundingMode: z
+        .enum(['NEAREST_RUPEE', 'EXACT_PAISE', 'NEAREST_UNIT', 'MINOR_UNIT'])
+        .optional(),
+      registrationDisclaimer: z.string().max(500).optional(),
+    })
+    .optional(),
+  maxDiscountPctWithoutApproval: z.coerce.number().min(0).max(100).optional(),
+  offers: z.array(promotionalOfferRuleSchema).optional(),
+});
+
+export const upsertCostSheetTemplateSchema = z.object({
+  orgId: z.string().min(1),
+  projectId: z.string().nullable().optional(),
+  templateId: z.string().optional(),
+  name: z.string().min(2, 'Template name is required').max(120),
+  code: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[A-Z0-9_-]+$/i, 'Use alphanumeric characters, hyphens or underscores'),
+  isDefault: z.boolean().default(false),
+  headerConfig: z.object({
+    title: z.string().min(2).max(140),
+    subtitle: z.string().max(200).optional(),
+    showOrgLogo: z.boolean().default(true),
+    showRegulatoryNumber: z.boolean().default(true),
+    accentColor: z.string().default('#0F265C'),
+  }),
+  sectionToggles: z.object({
+    showCustomerSection: z.boolean().default(true),
+    showUnitSection: z.boolean().default(true),
+    showAreaBreakdown: z.boolean().default(true),
+    showParkingBreakdown: z.boolean().default(true),
+    showTaxBreakdown: z.boolean().default(true),
+    showOfferRebates: z.boolean().default(true),
+    showPaymentSchedule: z.boolean().default(true),
+    showTerms: z.boolean().default(true),
+    showSalesRepSection: z.boolean().default(true),
+    showSignatureBlocks: z.boolean().default(true),
+  }),
+  customLabels: z.object({
+    unitSectionTitle: z.string().min(1).max(80).default('Unit & Property Specifications'),
+    customerSectionTitle: z.string().min(1).max(80).default('Prospective Buyer Details'),
+    pricingTableTitle: z.string().min(1).max(80).default('Detailed Consideration & Charge Breakdown'),
+    primaryTaxSummaryLabel: z.string().min(1).max(80).default('Primary Agreement Tax'),
+    secondaryTaxSummaryLabel: z.string().min(1).max(80).default('Service & Ancillary Tax'),
+    exemptSummaryLabel: z.string().min(1).max(80).default('Exempt / Deposit Charges'),
+    netConsiderationLabel: z.string().min(1).max(80).default('Net Consideration Before Tax'),
+    grandTotalLabel: z.string().min(1).max(80).default('Total Payable Value'),
+    scheduleSectionTitle: z.string().min(1).max(80).default('Payment Schedule'),
+  }),
+  defaultTermsAndConditions: z.string().min(5).max(4000),
+  footerText: z.string().max(400).default('System-generated official quotation.'),
 });
 
 // --- Payment Plans & Quotations ---
@@ -348,16 +605,18 @@ export const createQuotationSchema = z.object({
   unitId: z.string().min(1),
   priceBookId: z.string().min(1),
   paymentPlanId: z.string().min(1),
+  costSheetTemplateId: z.string().nullable().optional(),
+  offerCodes: z.array(z.string()).default([]),
   leadId: z.string().nullable().optional(),
   partnerOrgId: z.string().nullable().optional(),
   customer: z.object({
     name: z.string().min(2, 'Customer name is required').max(120),
-    phone: indianPhoneSchema,
+    phone: globalPhoneSchema,
     email: z.string().email().optional().or(z.literal('')),
     address: z.string().max(300).optional(),
   }),
   selectedParkingSlotIds: z.array(z.string()).default([]),
-  parkingSlotsCount: z.coerce.number().int().min(0).max(10).default(1),
+  parkingSlotsCount: z.coerce.number().int().min(0).max(50).default(1),
   parkingTypeUsed: z
     .enum(['STANDARD', 'TANDEM', 'MECHANICAL', 'EV', 'ACCESSIBLE'])
     .default('STANDARD'),
@@ -373,8 +632,10 @@ export const createQuotationSchema = z.object({
 // --- Leads, Partner Registration, Visits & Forms ---
 export const createLeadSchema = z.object({
   orgId: z.string().min(1),
+  projectId: z.string().nullable().optional(),
+  currencyCode: currencyCodeSchema.optional(),
   customerName: z.string().min(2, 'Customer name is required').max(120),
-  phone: indianPhoneSchema,
+  phone: globalPhoneSchema,
   email: z.string().email().optional().or(z.literal('')),
   source: z.enum([
     'WEBSITE',
@@ -397,7 +658,7 @@ export const createLeadSchema = z.object({
   preferredLocation: z.string().max(120).optional(),
   preferredProjectIds: z.array(z.string()).default([]),
   bhkPreference: z.string().max(40).optional(),
-  propertyType: z.enum(['APARTMENT', 'VILLA', 'PLOTTED', 'COMMERCIAL', 'MIXED']).optional(),
+  propertyType: projectTypeSchema.optional(),
   buyingTimeline: z
     .enum(['IMMEDIATE', '1_TO_3_MONTHS', '3_TO_6_MONTHS', '6_PLUS_MONTHS'])
     .optional(),
@@ -412,7 +673,7 @@ export const registerPartnerLeadSchema = z.object({
   projectId: z.string().min(1),
   partnerOrgId: z.string().min(1),
   customerName: z.string().min(2).max(120),
-  phone: indianPhoneSchema,
+  phone: globalPhoneSchema,
   email: z.string().email().optional().or(z.literal('')),
   budgetMaxInr: z.coerce.number().nonnegative().optional(),
   bhkPreference: z.string().max(40).optional(),
@@ -426,12 +687,12 @@ export const scheduleSiteVisitSchema = z.object({
   leadId: z.string().nullable().optional(),
   partnerOrgId: z.string().nullable().optional(),
   customerName: z.string().min(2, 'Visitor name is required').max(120),
-  customerPhone: indianPhoneSchema,
+  customerPhone: globalPhoneSchema,
   customerEmail: z.string().email().optional().or(z.literal('')),
   assignedAgentUid: z.string().nullable().optional(),
   scheduledStartAt: z.string().min(1, 'Visit start date/time is required'),
   scheduledEndAt: z.string().min(1, 'Visit end date/time is required'),
-  timezone: z.string().default('Asia/Kolkata'),
+  timezone: z.string().default('UTC'),
   notes: z.string().max(500).optional(),
 });
 
@@ -446,7 +707,7 @@ export const createBookingSchema = z.object({
   customer: z.object({
     fullName: z.string().min(2, 'Applicant full name is required').max(120),
     coApplicantName: z.string().max(120).optional(),
-    phone: indianPhoneSchema,
+    phone: globalPhoneSchema,
     email: z.string().email('Valid customer email is required'),
     panNumber: z
       .string()
@@ -582,7 +843,7 @@ export const mapFloorPlanVersionSchema = z
     orgId: z.string().min(1),
     documentId: z.string().min(1),
     projectId: z.string().min(1),
-    towerIds: z.array(z.string()).min(1, 'Select at least one tower'),
+    towerIds: z.array(z.string()).default([]), // Empty allowed for Villa/Plot non-tower projects
     floorCategory: z.enum([
       'PODIUM',
       'LOWER_RESIDENTIAL',
@@ -592,11 +853,9 @@ export const mapFloorPlanVersionSchema = z
       'COMMERCIAL',
       'GROUND_PLOT',
     ]),
-    minFloor: z.coerce.number().int().min(-5).max(150),
-    maxFloor: z.coerce.number().int().min(-5).max(150),
-    applicableUnitTypes: z
-      .array(z.enum(['APARTMENT', 'PENTHOUSE', 'VILLA', 'PLOT', 'SHOP', 'OFFICE']))
-      .min(1),
+    minFloor: z.coerce.number().int().min(-10).max(200),
+    maxFloor: z.coerce.number().int().min(-10).max(200),
+    applicableUnitTypes: z.array(unitTypeSchema).min(1),
     applicableBhk: z.array(z.string()).min(1),
     carpetAreaSqft: z.coerce.number().positive(),
     saleableAreaSqft: z.coerce.number().positive(),
