@@ -1,6 +1,6 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { DEFAULT_SAAS_PLANS } from '@bharat-makaan/config';
+import { DEFAULT_SAAS_PLANS, GLOBAL_COUNTRIES } from '@bharat-makaan/config';
 import {
   DEFAULT_ROLE_PERMISSIONS,
   isPrivilegedMfaRole,
@@ -14,6 +14,7 @@ import {
   inviteStaffMemberSchema,
   transferLeadsSchema,
   updateMemberAccessSchema,
+  updateOrganizationSettingsSchema,
 } from '@bharat-makaan/validation';
 import { adminAuth, adminDb } from '../shared/firebase-admin';
 import {
@@ -45,19 +46,40 @@ export async function createOrganizationService(
   const orgRef = db.collection('organizations').doc();
   const orgId = orgRef.id;
   const starterPlan = DEFAULT_SAAS_PLANS.STARTER;
+  const countryCode = (input.countryCode || 'IN').toUpperCase();
+  const countryDefaults = GLOBAL_COUNTRIES[countryCode] ?? GLOBAL_COUNTRIES.IN!;
 
   const organization: Organization = {
     id: orgId,
     name: input.name.trim(),
     slug: `${slugify(input.name)}-${orgId.slice(0, 6).toLowerCase()}`,
     legalName: input.legalName.trim(),
+    organizationType: input.organizationType ?? 'BUILDER',
+    countryCode,
+    stateOrRegion: input.stateOrRegion?.trim() || undefined,
+    defaultCurrency: input.defaultCurrency ?? countryDefaults.defaultCurrency,
+    defaultAreaUnit: input.defaultAreaUnit ?? countryDefaults.defaultAreaUnit,
+    defaultTimezone: input.defaultTimezone || countryDefaults.defaultTimezone,
+    taxRegistrationLabel: input.taxRegistrationLabel || (countryCode === 'IN' ? 'GSTIN' : 'Tax ID'),
+    taxRegistrationNumber: input.taxRegistrationNumber || input.gstin || undefined,
+    regulatoryAuthorityLabel:
+      input.regulatoryAuthorityLabel || countryDefaults.regulatoryAuthorityLabel,
+    regulatoryRegistrationNumber:
+      input.regulatoryRegistrationNumber || input.reraNumber || undefined,
     gstin: input.gstin || undefined,
     pan: input.pan || undefined,
-    reraNumber: input.reraNumber || undefined,
+    reraNumber: input.reraNumber || input.regulatoryRegistrationNumber || undefined,
     headquartersCity: input.headquartersCity.trim(),
     address: input.address?.trim() || undefined,
     phone: input.phone?.trim() || undefined,
     email: normalizeEmail(input.email),
+    taxRegime: {
+      primaryTaxLabel: countryDefaults.primaryTaxLabel,
+      primaryTaxPct: countryDefaults.defaultPrimaryTaxPct,
+      secondaryTaxLabel: countryDefaults.secondaryTaxLabel,
+      secondaryTaxPct: countryDefaults.defaultSecondaryTaxPct,
+      exemptLabel: 'Tax Exempt',
+    },
     status: 'ACTIVE',
     subscriptionPlanId: 'STARTER',
     leadProtectionDays: input.leadProtectionDays,
@@ -441,6 +463,74 @@ export const transferEmployeeLeads = onCall(async (request) => {
     'staff:transfer_leads'
   );
   return transferEmployeeLeadsService(
+    adminDb,
+    actor,
+    member?.role ?? 'PLATFORM_SUPER_ADMIN',
+    parsed
+  );
+});
+
+export async function updateOrganizationSettingsService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  rawInput: unknown
+): Promise<Organization> {
+  const input = updateOrganizationSettingsSchema.parse(rawInput);
+  const orgRef = db.collection('organizations').doc(input.orgId);
+  const snap = await orgRef.get();
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'Organization not found.');
+  }
+
+  const prev = snap.data() as Organization;
+  const nowIso = new Date().toISOString();
+  const updated: Organization = {
+    ...prev,
+    organizationType: input.organizationType ?? prev.organizationType,
+    countryCode: input.countryCode ? input.countryCode.toUpperCase() : prev.countryCode,
+    stateOrRegion: input.stateOrRegion !== undefined ? input.stateOrRegion : prev.stateOrRegion,
+    defaultCurrency: input.defaultCurrency ?? prev.defaultCurrency,
+    defaultAreaUnit: input.defaultAreaUnit ?? prev.defaultAreaUnit,
+    defaultTimezone: input.defaultTimezone ?? prev.defaultTimezone,
+    taxRegistrationLabel: input.taxRegistrationLabel ?? prev.taxRegistrationLabel,
+    taxRegistrationNumber: input.taxRegistrationNumber ?? prev.taxRegistrationNumber,
+    regulatoryAuthorityLabel: input.regulatoryAuthorityLabel ?? prev.regulatoryAuthorityLabel,
+    regulatoryRegistrationNumber:
+      input.regulatoryRegistrationNumber ?? prev.regulatoryRegistrationNumber,
+    leadProtectionDays: input.leadProtectionDays ?? prev.leadProtectionDays,
+    whatsappAutoSendAi: input.whatsappAutoSendAi ?? prev.whatsappAutoSendAi,
+    branding: input.branding ? { ...prev.branding, ...input.branding } : prev.branding,
+    taxRegime: input.taxRegime ?? prev.taxRegime,
+    updatedAt: nowIso,
+  };
+
+  await orgRef.set(updated);
+  await writeAuditEvent(db, {
+    orgId: input.orgId,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole,
+    action: 'ORGANIZATION_SETTINGS_UPDATED',
+    category: 'PERMISSION',
+    entityType: 'organization',
+    entityId: input.orgId,
+    summary: `Updated organization regional, branding, or tax settings for "${updated.name}".`,
+    after: {
+      countryCode: updated.countryCode,
+      defaultCurrency: updated.defaultCurrency,
+      defaultAreaUnit: updated.defaultAreaUnit,
+      organizationType: updated.organizationType,
+    },
+  });
+
+  return updated;
+}
+
+export const updateOrganizationSettings = onCall(async (request) => {
+  const parsed = updateOrganizationSettingsSchema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(request, parsed.orgId, 'org:manage');
+  return updateOrganizationSettingsService(
     adminDb,
     actor,
     member?.role ?? 'PLATFORM_SUPER_ADMIN',

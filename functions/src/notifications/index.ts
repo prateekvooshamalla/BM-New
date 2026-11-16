@@ -5,13 +5,17 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import nodemailer from 'nodemailer';
 import { z } from 'zod';
 import {
-  normalizeIndianPhone,
+  normalizeGlobalPhone,
   type Project,
   type SiteVisit,
 } from '@bharat-makaan/shared';
 import { scheduleSiteVisitSchema } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
-import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
+import {
+  requireOrgPermission,
+  requirePartnerProjectScope,
+  type AuthenticatedActor,
+} from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
 
 export async function scheduleSiteVisitService(
@@ -31,7 +35,7 @@ export async function scheduleSiteVisitService(
   }
 
   const nowIso = new Date().toISOString();
-  const normPhone = normalizeIndianPhone(input.customerPhone);
+  const normPhone = normalizeGlobalPhone(input.customerPhone);
   const ref = db.collection('site_visits').doc();
 
   // Deterministic idempotency key for scheduled reminder job
@@ -193,6 +197,26 @@ export async function sendTransactionalEmail(params: {
 
 export const scheduleSiteVisit = onCall(async (request) => {
   const parsed = scheduleSiteVisitSchema.parse(request.data);
+  if (parsed.partnerOrgId) {
+    try {
+      const { actor } = await requirePartnerProjectScope(
+        request,
+        parsed.partnerOrgId,
+        parsed.orgId,
+        parsed.projectId,
+        'visits:schedule'
+      );
+      return scheduleSiteVisitService(adminDb, actor, parsed);
+    } catch {
+      const { actor } = await requireOrgPermission(
+        request,
+        parsed.orgId,
+        'visits:schedule',
+        parsed.projectId
+      );
+      return scheduleSiteVisitService(adminDb, actor, parsed);
+    }
+  }
   const { actor } = await requireOrgPermission(
     request,
     parsed.orgId,

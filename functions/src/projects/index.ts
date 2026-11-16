@@ -1,22 +1,49 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { z } from 'zod';
-import type {
-  Floor,
-  Project,
-  ProjectPhase,
-  Subscription,
-  Tower,
+import {
+  GLOBAL_COUNTRIES,
+  PROJECT_STRUCTURE_TEMPLATES,
+  type Floor,
+  type Organization,
+  type Project,
+  type ProjectPhase,
+  type ProjectStructureTemplateKey,
+  type ProjectType,
+  type Subscription,
+  type Tower,
 } from '@bharat-makaan/shared';
 import {
+  areaUnitSchema,
   createFloorSchema,
   createPhaseSchema,
   createProjectSchema,
   createTowerSchema,
+  currencyCodeSchema,
 } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+
+function defaultTemplateForProjectType(projectType: ProjectType): ProjectStructureTemplateKey {
+  switch (projectType) {
+    case 'APARTMENT':
+      return 'APARTMENT_TOWER';
+    case 'VILLA':
+    case 'INDEPENDENT_HOUSE':
+      return 'VILLA_COMMUNITY';
+    case 'PLOTTED':
+      return 'PLOTTED_LAYOUT';
+    case 'COMMERCIAL':
+    case 'OFFICE':
+    case 'RETAIL':
+      return 'COMMERCIAL_BUILDING';
+    case 'MIXED':
+    case 'RESALE_PORTFOLIO':
+    case 'RENTAL_PORTFOLIO':
+      return 'CUSTOM_HIERARCHY';
+  }
+}
 
 export async function createProjectService(
   db: Firestore,
@@ -28,8 +55,11 @@ export async function createProjectService(
   const nowIso = new Date().toISOString();
 
   return db.runTransaction(async (tx) => {
+    const orgRef = db.collection('organizations').doc(input.orgId);
     const subRef = db.collection('subscriptions').doc(input.orgId);
-    const subSnap = await tx.get(subRef);
+    const [orgSnap, subSnap] = await Promise.all([tx.get(orgRef), tx.get(subRef)]);
+    const org = orgSnap.exists ? (orgSnap.data() as Organization) : null;
+
     if (subSnap.exists) {
       const sub = subSnap.data() as Subscription;
       const maxProjects =
@@ -58,6 +88,12 @@ export async function createProjectService(
       );
     }
 
+    const countryCode = (input.countryCode || org?.countryCode || 'IN').toUpperCase();
+    const countryCfg = GLOBAL_COUNTRIES[countryCode] ?? GLOBAL_COUNTRIES.IN!;
+    const structureTemplate =
+      input.structureTemplate ?? defaultTemplateForProjectType(input.projectType);
+    const tplDef = PROJECT_STRUCTURE_TEMPLATES[structureTemplate];
+
     const projectRef = db.collection('projects').doc();
     const project: Project = {
       id: projectRef.id,
@@ -65,13 +101,32 @@ export async function createProjectService(
       builderName: input.builderName.trim(),
       name: input.name.trim(),
       code: input.code.trim().toUpperCase(),
+      countryCode,
+      stateOrRegion: input.stateOrRegion?.trim() || org?.stateOrRegion || undefined,
       city: input.city.trim(),
       locality: input.locality.trim(),
       address: input.address.trim(),
       coordinates: input.coordinates,
+      currencyCode: input.currencyCode ?? org?.defaultCurrency ?? countryCfg.defaultCurrency,
+      areaUnit: input.areaUnit ?? org?.defaultAreaUnit ?? countryCfg.defaultAreaUnit,
+      timezone: input.timezone ?? org?.defaultTimezone ?? countryCfg.defaultTimezone,
       projectType: input.projectType,
+      structureTemplate,
+      hierarchyLabels: input.hierarchyLabels ?? {
+        phaseLabel: tplDef.hierarchyLabels.phaseLabel,
+        structureLabel: tplDef.hierarchyLabels.structureLabel,
+        floorLabel: tplDef.hierarchyLabels.floorLabel,
+        unitLabel: tplDef.hierarchyLabels.unitLabel,
+        requiresStructure: tplDef.requiresStructure,
+        requiresFloor: tplDef.requiresFloor,
+      },
+      regulatoryAuthorityLabel:
+        input.regulatoryAuthorityLabel ??
+        org?.regulatoryAuthorityLabel ??
+        countryCfg.regulatoryAuthorityLabel,
       reraNumber: input.reraNumber.trim(),
       reraValidUntil: input.reraValidUntil || undefined,
+      defaultCostSheetTemplateId: input.defaultCostSheetTemplateId ?? null,
       landAreaAcres: input.landAreaAcres,
       totalPhases: 0,
       totalTowers: 0,
@@ -395,4 +450,91 @@ export const createFloor = onCall(async (request) => {
     parsed.projectId
   );
   return createFloorService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
+});
+
+export async function updateProjectConfigurationService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  params: {
+    orgId: string;
+    projectId: string;
+    defaultCostSheetTemplateId?: string | null;
+    currencyCode?: Project['currencyCode'];
+    areaUnit?: Project['areaUnit'];
+    regulatoryAuthorityLabel?: string;
+    hierarchyLabels?: Project['hierarchyLabels'];
+  }
+): Promise<Project> {
+  const projRef = db.collection('projects').doc(params.projectId);
+  const snap = await projRef.get();
+  if (!snap.exists || snap.data()?.orgId !== params.orgId) {
+    throw new HttpsError('not-found', 'Project not found in organization.');
+  }
+  const prev = snap.data() as Project;
+  const nowIso = new Date().toISOString();
+  const updated: Project = {
+    ...prev,
+    defaultCostSheetTemplateId:
+      params.defaultCostSheetTemplateId !== undefined
+        ? params.defaultCostSheetTemplateId
+        : prev.defaultCostSheetTemplateId,
+    currencyCode: params.currencyCode ?? prev.currencyCode,
+    areaUnit: params.areaUnit ?? prev.areaUnit,
+    regulatoryAuthorityLabel: params.regulatoryAuthorityLabel ?? prev.regulatoryAuthorityLabel,
+    hierarchyLabels: params.hierarchyLabels ?? prev.hierarchyLabels,
+    updatedAt: nowIso,
+  };
+  await projRef.set(updated);
+  await writeAuditEvent(db, {
+    orgId: params.orgId,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole,
+    action: 'PROJECT_CONFIGURATION_UPDATED',
+    category: 'INVENTORY',
+    entityType: 'project',
+    entityId: params.projectId,
+    summary: `Updated project configuration for "${updated.name}" (${updated.code}).`,
+    after: {
+      defaultCostSheetTemplateId: updated.defaultCostSheetTemplateId,
+      currencyCode: updated.currencyCode,
+      areaUnit: updated.areaUnit,
+    },
+  });
+  return updated;
+}
+
+export const updateProjectConfiguration = onCall(async (request) => {
+  const schema = z.object({
+    orgId: z.string().min(1),
+    projectId: z.string().min(1),
+    defaultCostSheetTemplateId: z.string().nullable().optional(),
+    currencyCode: currencyCodeSchema.optional(),
+    areaUnit: areaUnitSchema.optional(),
+    regulatoryAuthorityLabel: z.string().max(60).optional(),
+    hierarchyLabels: z
+      .object({
+        phaseLabel: z.string().min(1).max(40),
+        structureLabel: z.string().min(1).max(40),
+        floorLabel: z.string().min(1).max(40),
+        unitLabel: z.string().min(1).max(40),
+        requiresStructure: z.boolean(),
+        requiresFloor: z.boolean(),
+      })
+      .optional(),
+  });
+  const input = schema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(
+    request,
+    input.orgId,
+    'projects:edit',
+    input.projectId
+  );
+  return updateProjectConfigurationService(
+    adminDb,
+    actor,
+    member?.role ?? 'PLATFORM_SUPER_ADMIN',
+    input
+  );
 });

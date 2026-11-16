@@ -4,13 +4,20 @@ import { z } from 'zod';
 import {
   calculateCostSheet,
   canTransitionPriceBook,
+  formatCurrency,
   isPriceBookImmutable,
   type CostSheetLineItemRule,
+  type CostSheetTemplate,
   type PriceBook,
   type PriceRevision,
+  type PricingScopeOverride,
   type Unit,
 } from '@bharat-makaan/shared';
-import { upsertPriceBookSchema } from '@bharat-makaan/validation';
+import {
+  savePricingScopeOverrideSchema,
+  upsertCostSheetTemplateSchema,
+  upsertPriceBookSchema,
+} from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { createApprovalRequestService } from '../approvals';
@@ -114,6 +121,13 @@ export async function savePriceBookDraftService(
       description: input.description?.trim(),
       effectiveFrom: input.effectiveFrom,
       expiresAt: input.expiresAt ?? null,
+      currencyCode: input.currencyCode ?? existing.currencyCode,
+      areaUnit: input.areaUnit ?? existing.areaUnit,
+      pricingMode: input.pricingMode ?? existing.pricingMode,
+      baseUnitPrice: input.baseUnitPrice ?? existing.baseUnitPrice,
+      baseConsiderationLabel: input.baseConsiderationLabel ?? existing.baseConsiderationLabel,
+      floorRiseLabel: input.floorRiseLabel ?? existing.floorRiseLabel,
+      parkingLabel: input.parkingLabel ?? existing.parkingLabel,
       basePricePerSqft: input.basePricePerSqft,
       floorRise: input.floorRise,
       facingPremiumPerSqft: input.facingPremiumPerSqft,
@@ -124,6 +138,7 @@ export async function savePriceBookDraftService(
       parkingPricesByType: input.parkingPricesByType,
       lineItems: input.lineItems,
       taxConfig: input.taxConfig,
+      offers: input.offers ?? existing.offers,
       maxDiscountPctWithoutApproval: input.maxDiscountPctWithoutApproval,
       defaultPaymentPlanId: input.defaultPaymentPlanId ?? null,
       internalNotes: input.internalNotes,
@@ -172,6 +187,13 @@ export async function savePriceBookDraftService(
     isImmutable: false,
     effectiveFrom: input.effectiveFrom,
     expiresAt: input.expiresAt ?? null,
+    currencyCode: input.currencyCode,
+    areaUnit: input.areaUnit,
+    pricingMode: input.pricingMode,
+    baseUnitPrice: input.baseUnitPrice,
+    baseConsiderationLabel: input.baseConsiderationLabel,
+    floorRiseLabel: input.floorRiseLabel,
+    parkingLabel: input.parkingLabel,
     basePricePerSqft: input.basePricePerSqft,
     floorRise: input.floorRise,
     facingPremiumPerSqft: input.facingPremiumPerSqft,
@@ -182,6 +204,7 @@ export async function savePriceBookDraftService(
     parkingPricesByType: input.parkingPricesByType,
     lineItems: input.lineItems,
     taxConfig: input.taxConfig,
+    offers: input.offers,
     maxDiscountPctWithoutApproval: input.maxDiscountPctWithoutApproval,
     defaultPaymentPlanId: input.defaultPaymentPlanId ?? null,
     internalNotes: input.internalNotes,
@@ -290,6 +313,13 @@ export async function submitPriceBookForApprovalService(
   };
   await pbRef.set(updated);
 
+  const currencyLabel = pb.currencyCode ?? 'INR';
+  const areaLabel = pb.areaUnit ?? 'SQFT';
+  const rateText =
+    pb.pricingMode === 'BASE_UNIT_PRICE'
+      ? `Base ${formatCurrency(pb.baseUnitPrice ?? pb.basePricePerSqft, currencyLabel)}`
+      : `Base ${formatCurrency(pb.basePricePerSqft, currencyLabel)}/${areaLabel.toLowerCase()}`;
+
   await createApprovalRequestService(db, {
     orgId: params.orgId,
     entityType: 'PRICE_BOOK',
@@ -298,10 +328,12 @@ export async function submitPriceBookForApprovalService(
     requestedByUid: actor.uid,
     requestedByName: actorName,
     requiredPermission: 'pricing:approve',
-    requestSummary: `Approve Price Book "${pb.name}" v${pb.versionNumber} (Base ₹${pb.basePricePerSqft}/sq.ft.)`,
+    requestSummary: `Approve Price Book "${pb.name}" v${pb.versionNumber} (${rateText})`,
     payloadSnapshot: {
       versionNumber: pb.versionNumber,
       basePricePerSqft: pb.basePricePerSqft,
+      currencyCode: currencyLabel,
+      areaUnit: areaLabel,
       effectiveFrom: pb.effectiveFrom,
     },
   });
@@ -311,8 +343,9 @@ export async function submitPriceBookForApprovalService(
 
 /**
  * Activates an APPROVED price book, archives any previously ACTIVE price book,
- * recalculates AVAILABLE / ON_HOLD units (never mutating BOOKED/AGREEMENT/REGISTERED units
- * or previously issued quotation snapshots!), and writes unit-level `price_revisions`.
+ * recalculates AVAILABLE / ON_HOLD units applying 6-level inherited `pricing_overrides`
+ * (never mutating BOOKED/AGREEMENT/REGISTERED units or previously issued quotation snapshots!),
+ * and writes unit-level `price_revisions`.
  */
 export async function activatePriceBookService(
   db: Firestore,
@@ -362,12 +395,17 @@ export async function activatePriceBookService(
   };
   batch.set(pbRef, activatedBook);
 
-  // Recalculate unbooked inventory units & generate price_revisions
-  const unitsSnap = await db
-    .collection('units')
-    .where('orgId', '==', params.orgId)
-    .where('projectId', '==', pb.projectId)
-    .get();
+  // Load 6-level inherited pricing overrides & unbooked inventory units
+  const [unitsSnap, overridesSnap] = await Promise.all([
+    db
+      .collection('units')
+      .where('orgId', '==', params.orgId)
+      .where('projectId', '==', pb.projectId)
+      .get(),
+    db.collection('pricing_overrides').where('orgId', '==', params.orgId).get(),
+  ]);
+
+  const overrides = overridesSnap.docs.map((d) => d.data() as PricingScopeOverride);
 
   let updatedUnitsCount = 0;
   let revisionsCreated = 0;
@@ -387,6 +425,7 @@ export async function activatePriceBookService(
     const computed = calculateCostSheet({
       unit,
       priceBook: activatedBook,
+      overrides,
     });
 
     const newTotal = computed.totalPayableInr;
@@ -398,16 +437,17 @@ export async function activatePriceBookService(
       computed.unitSpecificPremiumInr;
 
     batch.update(unitDoc.ref, {
-      baseRatePerSqft: activatedBook.basePricePerSqft,
+      baseRatePerSqft: computed.baseRatePerSqft,
       activePriceBookId: activatedBook.id,
       floorRiseAmount: computed.floorRiseInr,
       premiumChargesAmount: premiumSum,
       calculatedTotalPrice: newTotal,
+      calculatedTotalMinor: computed.totalPayableMinor,
       updatedAt: nowIso,
     });
     updatedUnitsCount++;
 
-    if (oldTotal !== newTotal || oldBaseRate !== activatedBook.basePricePerSqft) {
+    if (oldTotal !== newTotal || oldBaseRate !== computed.baseRatePerSqft) {
       const revRef = db.collection('price_revisions').doc();
       const changeAmount = newTotal - oldTotal;
       const changePct =
@@ -423,7 +463,7 @@ export async function activatePriceBookService(
         newPriceBookId: activatedBook.id,
         priceBookVersion: activatedBook.versionNumber,
         oldBaseRate,
-        newBaseRate: activatedBook.basePricePerSqft,
+        newBaseRate: computed.baseRatePerSqft,
         oldTotalValue: oldTotal,
         newTotalValue: newTotal,
         changeAmount,
@@ -459,6 +499,152 @@ export async function activatePriceBookService(
   });
 
   return { activatedBook, updatedUnitsCount, revisionsCreated };
+}
+
+export async function savePricingScopeOverrideService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  rawInput: unknown
+): Promise<PricingScopeOverride> {
+  const input = savePricingScopeOverrideSchema.parse(rawInput);
+  const nowIso = new Date().toISOString();
+
+  const prevSnap = await db
+    .collection('pricing_overrides')
+    .where('orgId', '==', input.orgId)
+    .where('scopeLevel', '==', input.scopeLevel)
+    .where('targetId', '==', input.targetId)
+    .get();
+
+  const maxVersion = prevSnap.docs.reduce(
+    (max, d) => Math.max(max, (d.data() as PricingScopeOverride).versionNumber ?? 0),
+    0
+  );
+
+  const ref = input.overrideId
+    ? db.collection('pricing_overrides').doc(input.overrideId)
+    : db.collection('pricing_overrides').doc();
+
+  const override: PricingScopeOverride = {
+    id: ref.id,
+    orgId: input.orgId,
+    projectId: input.projectId ?? null,
+    scopeLevel: input.scopeLevel,
+    targetId: input.targetId,
+    label: input.label?.trim(),
+    versionNumber: maxVersion + 1,
+    isActive: input.isActive,
+    currencyCode: input.currencyCode,
+    areaUnit: input.areaUnit,
+    pricingMode: input.pricingMode,
+    basePricePerArea: input.basePricePerArea,
+    baseUnitPrice: input.baseUnitPrice,
+    baseConsiderationLabel: input.baseConsiderationLabel,
+    floorRise: input.floorRise,
+    facingPremiumPerSqft: input.facingPremiumPerSqft,
+    viewPremiumPerSqft: input.viewPremiumPerSqft,
+    cornerPremiumPerSqft: input.cornerPremiumPerSqft,
+    locationPremiumPerSqft: input.locationPremiumPerSqft,
+    parkingPricesByType: input.parkingPricesByType,
+    lineItemsOverride: input.lineItemsOverride,
+    taxConfigOverride: input.taxConfigOverride,
+    maxDiscountPctWithoutApproval: input.maxDiscountPctWithoutApproval,
+    offers: input.offers,
+    effectiveFrom: input.effectiveFrom,
+    createdByUid: actor.uid,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  await ref.set(override);
+  await writeAuditEvent(db, {
+    orgId: input.orgId,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole,
+    action: 'PRICING_SCOPE_OVERRIDE_SAVED',
+    category: 'PRICING',
+    entityType: 'pricing_override',
+    entityId: override.id,
+    summary: `Saved ${override.scopeLevel} pricing override v${override.versionNumber} for target "${override.targetId}".`,
+    after: {
+      scopeLevel: override.scopeLevel,
+      targetId: override.targetId,
+      versionNumber: override.versionNumber,
+      isActive: override.isActive,
+    },
+  });
+
+  return override;
+}
+
+export async function upsertCostSheetTemplateService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  rawInput: unknown
+): Promise<CostSheetTemplate> {
+  const input = upsertCostSheetTemplateSchema.parse(rawInput);
+  const nowIso = new Date().toISOString();
+
+  const ref = input.templateId
+    ? db.collection('cost_sheet_templates').doc(input.templateId)
+    : db.collection('cost_sheet_templates').doc();
+
+  const existingSnap = input.templateId ? await ref.get() : null;
+  if (existingSnap && existingSnap.exists && existingSnap.data()?.orgId !== input.orgId) {
+    throw new HttpsError('permission-denied', 'Template belongs to a different organization.');
+  }
+
+  const template: CostSheetTemplate = {
+    id: ref.id,
+    orgId: input.orgId,
+    projectId: input.projectId ?? null,
+    name: input.name.trim(),
+    code: input.code.trim().toUpperCase(),
+    isDefault: input.isDefault,
+    headerConfig: input.headerConfig,
+    sectionToggles: input.sectionToggles,
+    customLabels: input.customLabels,
+    defaultTermsAndConditions: input.defaultTermsAndConditions,
+    footerText: input.footerText,
+    createdByUid: existingSnap?.exists
+      ? (existingSnap.data() as CostSheetTemplate).createdByUid
+      : actor.uid,
+    createdAt: existingSnap?.exists
+      ? (existingSnap.data() as CostSheetTemplate).createdAt
+      : nowIso,
+    updatedAt: nowIso,
+  };
+
+  await ref.set(template);
+
+  // If projectId is provided and isDefault is true, bind project.defaultCostSheetTemplateId automatically
+  if (input.projectId && input.isDefault) {
+    const projRef = db.collection('projects').doc(input.projectId);
+    const projSnap = await projRef.get();
+    if (projSnap.exists && projSnap.data()?.orgId === input.orgId) {
+      await projRef.update({
+        defaultCostSheetTemplateId: template.id,
+        updatedAt: nowIso,
+      });
+    }
+  }
+
+  await writeAuditEvent(db, {
+    orgId: input.orgId,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole,
+    action: 'COST_SHEET_TEMPLATE_SAVED',
+    category: 'PRICING',
+    entityType: 'cost_sheet_template',
+    entityId: template.id,
+    summary: `Saved cost-sheet template "${template.name}" (${template.code})${template.projectId ? ` for project ${template.projectId}` : ' (Organization-wide)'}.`,
+  });
+
+  return template;
 }
 
 // --- Cloud Functions v2 Callables ---
@@ -527,4 +713,36 @@ export const activatePriceBook = onCall(async (request) => {
     input.projectId
   );
   return activatePriceBookService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', input);
+});
+
+export const savePricingScopeOverride = onCall(async (request) => {
+  const parsed = savePricingScopeOverrideSchema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(
+    request,
+    parsed.orgId,
+    'pricing:edit_draft',
+    parsed.projectId ?? null
+  );
+  return savePricingScopeOverrideService(
+    adminDb,
+    actor,
+    member?.role ?? 'PLATFORM_SUPER_ADMIN',
+    parsed
+  );
+});
+
+export const upsertCostSheetTemplate = onCall(async (request) => {
+  const parsed = upsertCostSheetTemplateSchema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(
+    request,
+    parsed.orgId,
+    'pricing:edit_draft',
+    parsed.projectId ?? null
+  );
+  return upsertCostSheetTemplateService(
+    adminDb,
+    actor,
+    member?.role ?? 'PLATFORM_SUPER_ADMIN',
+    parsed
+  );
 });

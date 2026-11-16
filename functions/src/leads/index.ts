@@ -2,12 +2,14 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { z } from 'zod';
 import {
+  GLOBAL_COUNTRIES,
   computeDeterministicLeadScore,
   normalizeEmail,
-  normalizeIndianPhone,
+  normalizeGlobalPhone,
   type Lead,
   type LeadActivity,
   type LeadStage,
+  type Organization,
   type Project,
 } from '@bharat-makaan/shared';
 import { createLeadSchema } from '@bharat-makaan/validation';
@@ -27,8 +29,19 @@ export async function ingestLeadService(
 ): Promise<{ lead: Lead; deduplicated: boolean }> {
   const input = createLeadSchema.parse(rawInput);
   const nowIso = new Date().toISOString();
-  const normalizedPhone = normalizeIndianPhone(input.phone);
+  const orgSnap = await db.collection('organizations').doc(input.orgId).get();
+  const org = orgSnap.exists ? (orgSnap.data() as Organization) : null;
+  const callingCode =
+    GLOBAL_COUNTRIES[(org?.countryCode ?? 'IN').toUpperCase()]?.callingCode ?? '+91';
+  const normalizedPhone = normalizeGlobalPhone(input.phone, callingCode);
   const normalizedEmail = normalizeEmail(input.email);
+  const primaryProjectId = input.projectId ?? input.preferredProjectIds[0] ?? null;
+  const preferredProjectIds = Array.from(
+    new Set([
+      ...(primaryProjectId ? [primaryProjectId] : []),
+      ...input.preferredProjectIds,
+    ])
+  );
 
   // Deduplication check within the same builder organization
   const existingSnap = await db
@@ -41,10 +54,11 @@ export async function ingestLeadService(
   if (!existingSnap.empty) {
     const existingLead = existingSnap.docs[0]!.data() as Lead;
     const mergedProjects = Array.from(
-      new Set([...existingLead.preferredProjectIds, ...input.preferredProjectIds])
+      new Set([...existingLead.preferredProjectIds, ...preferredProjectIds])
     );
 
     await existingSnap.docs[0]!.ref.update({
+      projectId: existingLead.projectId ?? primaryProjectId,
       preferredProjectIds: mergedProjects,
       updatedAt: nowIso,
     });
@@ -63,7 +77,12 @@ export async function ingestLeadService(
     await actRef.set(activity);
 
     return {
-      lead: { ...existingLead, preferredProjectIds: mergedProjects, updatedAt: nowIso },
+      lead: {
+        ...existingLead,
+        projectId: existingLead.projectId ?? primaryProjectId,
+        preferredProjectIds: mergedProjects,
+        updatedAt: nowIso,
+      },
       deduplicated: true,
     };
   }
@@ -71,7 +90,7 @@ export async function ingestLeadService(
   const score = computeDeterministicLeadScore({
     budgetMaxInr: input.budgetMaxInr,
     buyingTimeline: input.buyingTimeline,
-    preferredProjectIds: input.preferredProjectIds,
+    preferredProjectIds,
     email: normalizedEmail,
     stage: 'NEW',
     qualificationStatus: 'UNREVIEWED',
@@ -81,6 +100,8 @@ export async function ingestLeadService(
   const lead: Lead = {
     id: leadRef.id,
     orgId: input.orgId,
+    projectId: primaryProjectId,
+    currencyCode: input.currencyCode ?? org?.defaultCurrency ?? 'INR',
     customerName: input.customerName.trim(),
     phone: input.phone.trim(),
     normalizedPhone,
@@ -91,7 +112,7 @@ export async function ingestLeadService(
     budgetMinInr: input.budgetMinInr,
     budgetMaxInr: input.budgetMaxInr,
     preferredLocation: input.preferredLocation?.trim() || undefined,
-    preferredProjectIds: input.preferredProjectIds,
+    preferredProjectIds,
     bhkPreference: input.bhkPreference,
     propertyType: input.propertyType,
     buyingTimeline: input.buyingTimeline,
@@ -219,7 +240,13 @@ export async function updateLeadStageService(
 
 export const createLead = onCall(async (request) => {
   const parsed = createLeadSchema.parse(request.data);
-  const { actor, member } = await requireOrgPermission(request, parsed.orgId, 'leads:create');
+  const targetProjectId = parsed.projectId ?? parsed.preferredProjectIds[0] ?? null;
+  const { actor, member } = await requireOrgPermission(
+    request,
+    parsed.orgId,
+    'leads:create',
+    targetProjectId
+  );
   return ingestLeadService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
 });
 

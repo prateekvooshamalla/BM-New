@@ -185,7 +185,9 @@ export async function mapFloorPlanToUnitsService(
 
   for (const unitDoc of unitsSnap.docs) {
     const unit = unitDoc.data() as Unit;
-    if (!unit.towerId || !input.towerIds.includes(unit.towerId)) continue;
+    if (input.towerIds.length > 0 && (!unit.towerId || !input.towerIds.includes(unit.towerId))) {
+      continue;
+    }
     if (unit.floorNumber < input.minFloor || unit.floorNumber > input.maxFloor) continue;
     if (!input.applicableUnitTypes.includes(unit.unitType)) continue;
     if (!input.applicableBhk.includes(unit.bhk)) continue;

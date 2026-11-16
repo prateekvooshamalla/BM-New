@@ -19,6 +19,7 @@
     "test": "pnpm --filter @bharat-makaan/tests test",
     "test:emulator": "pnpm --filter @bharat-makaan/tests test:emulator",
     "provision:super-admin": "tsx scripts/provision-super-admin.ts",
+    "migrate:multi-project": "tsx scripts/migrate-multi-project-schema.ts",
     "generate:sitemap": "tsx scripts/generate-sitemap.ts"
   },
   "devDependencies": {

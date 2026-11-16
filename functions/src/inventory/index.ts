@@ -3,13 +3,18 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { z } from 'zod';
 import {
+  toMinorUnits,
   validateUnitTransition,
   type Project,
   type ProjectStats,
   type Unit,
   type UnitStatus,
 } from '@bharat-makaan/shared';
-import { createUnitSchema, unitStatusTransitionSchema } from '@bharat-makaan/validation';
+import {
+  createUnitSchema,
+  unitStatusTransitionSchema,
+  unitTypeSchema,
+} from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
@@ -63,7 +68,15 @@ export async function createUnitService(
       );
     }
 
-    const basePrice = Math.round(input.saleableAreaSqft * input.baseRatePerSqft);
+    const currencyCode = input.currencyCode ?? proj.currencyCode ?? 'INR';
+    const areaUnit = input.areaUnit ?? proj.areaUnit ?? 'SQFT';
+    const pricingMode = input.pricingMode ?? 'PER_AREA';
+    const primaryArea = input.primaryArea ?? input.saleableAreaSqft;
+    const secondaryArea = input.secondaryArea ?? input.carpetAreaSqft;
+    const basePrice =
+      pricingMode === 'BASE_UNIT_PRICE'
+        ? Math.round((input.baseUnitPrice ?? primaryArea * input.baseRatePerSqft) * 100) / 100
+        : Math.round(primaryArea * input.baseRatePerSqft * 100) / 100;
     const unitRef = db.collection('units').doc();
 
     const unit: Unit = {
@@ -77,7 +90,12 @@ export async function createUnitService(
       floorNumber: input.floorNumber,
       unitNumber: input.unitNumber.trim().toUpperCase(),
       unitType: input.unitType,
+      inventorySource: input.inventorySource ?? 'PRIMARY_DEVELOPER',
       bhk: input.bhk.trim(),
+      currencyCode,
+      areaUnit,
+      primaryArea,
+      secondaryArea,
       saleableAreaSqft: input.saleableAreaSqft,
       carpetAreaSqft: input.carpetAreaSqft,
       plotAreaSqft: input.plotAreaSqft,
@@ -87,10 +105,13 @@ export async function createUnitService(
       balconiesCount: input.balconiesCount,
       parkingEntitlementCount: input.parkingEntitlementCount,
       assignedParkingSlotIds: [],
+      pricingMode,
+      baseUnitPrice: input.baseUnitPrice,
       baseRatePerSqft: input.baseRatePerSqft,
       floorRiseAmount: 0,
       premiumChargesAmount: 0,
       calculatedTotalPrice: basePrice,
+      calculatedTotalMinor: toMinorUnits(basePrice, currencyCode),
       status: 'AVAILABLE',
       holdExpiresAt: null,
       heldByUid: null,
@@ -284,12 +305,13 @@ export const createUnit = onCall(async (request) => {
 const bulkGenerateUnitsSchema = z.object({
   orgId: z.string().min(1),
   projectId: z.string().min(1),
-  towerId: z.string().min(1),
+  towerId: z.string().nullable().optional(),
   towerCode: z.string().min(1),
-  towerName: z.string().min(1),
-  startFloor: z.coerce.number().int().min(1).max(120),
-  endFloor: z.coerce.number().int().min(1).max(120),
-  unitsPerFloor: z.coerce.number().int().min(1).max(20),
+  towerName: z.string().optional(),
+  unitType: unitTypeSchema.default('APARTMENT'),
+  startFloor: z.coerce.number().int().min(0).max(200),
+  endFloor: z.coerce.number().int().min(0).max(200),
+  unitsPerFloor: z.coerce.number().int().min(1).max(50),
   bhk: z.string().min(1),
   saleableAreaSqft: z.coerce.number().positive(),
   carpetAreaSqft: z.coerce.number().positive(),
@@ -304,7 +326,7 @@ const bulkGenerateUnitsSchema = z.object({
     'SOUTH_WEST',
   ]),
   baseRatePerSqft: z.coerce.number().nonnegative(),
-  parkingEntitlementCount: z.coerce.number().int().min(0).max(5).default(1),
+  parkingEntitlementCount: z.coerce.number().int().min(0).max(20).default(1),
 });
 
 export const bulkGenerateTowerUnits = onCall(async (request) => {
@@ -327,7 +349,10 @@ export const bulkGenerateTowerUnits = onCall(async (request) => {
   let created = 0;
   for (let fl = input.startFloor; fl <= input.endFloor; fl++) {
     for (let idx = 1; idx <= input.unitsPerFloor; idx++) {
-      const flatNo = `${input.towerCode.toUpperCase()}-${fl}${String(idx).padStart(2, '0')}`;
+      const flatNo =
+        fl === 0
+          ? `${input.towerCode.toUpperCase()}-${String(idx).padStart(2, '0')}`
+          : `${input.towerCode.toUpperCase()}-${fl}${String(idx).padStart(2, '0')}`;
       try {
         await createUnitService(
           adminDb,
@@ -336,17 +361,17 @@ export const bulkGenerateTowerUnits = onCall(async (request) => {
           {
             orgId: input.orgId,
             projectId: input.projectId,
-            towerId: input.towerId,
+            towerId: input.towerId ?? null,
             towerName: input.towerName,
             floorNumber: fl,
             unitNumber: flatNo,
-            unitType: 'APARTMENT',
+            unitType: input.unitType,
             bhk: input.bhk,
             saleableAreaSqft: input.saleableAreaSqft,
             carpetAreaSqft: input.carpetAreaSqft,
             facing: input.facing,
             isCorner: idx === 1 || idx === input.unitsPerFloor,
-            balconiesCount: 2,
+            balconiesCount: input.unitType === 'PLOT' ? 0 : 2,
             parkingEntitlementCount: input.parkingEntitlementCount,
             baseRatePerSqft: input.baseRatePerSqft,
             listingMode: 'BUY',
