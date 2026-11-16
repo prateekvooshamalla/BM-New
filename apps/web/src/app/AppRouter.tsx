@@ -11,6 +11,7 @@ import { WhatsAppInboxPage } from '@/features/whatsapp/pages/WhatsAppInboxPage';
 import { ChannelPartnersPage } from '@/features/channel-partners/pages/ChannelPartnersPage';
 import { PartnerPortalPage } from '@/features/channel-partners/pages/PartnerPortalPage';
 import { SiteVisitsPage } from '@/features/visits/pages/SiteVisitsPage';
+import { BookingsAndCollectionsPage } from '@/features/bookings/pages/BookingsAndCollectionsPage';
 import { SettingsPage } from '@/features/settings/pages/SettingsPage';
 
 export function AppRouter() {
@@ -33,6 +34,7 @@ export function AppRouter() {
           <Route path="inbox" element={<WhatsAppInboxPage />} />
           <Route path="channel-partners" element={<ChannelPartnersPage />} />
           <Route path="visits" element={<SiteVisitsPage />} />
+          <Route path="bookings" element={<BookingsAndCollectionsPage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<DashboardPage />} />

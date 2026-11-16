@@ -16,3 +16,5 @@ export * from './leads';
 export * from './channel-partners';
 export * from './whatsapp';
 export * from './notifications';
+export * from './bookings';
+export * from './collections';
