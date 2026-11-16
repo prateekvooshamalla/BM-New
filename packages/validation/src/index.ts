@@ -430,7 +430,7 @@ export const costSheetLineItemRuleSchema = z.object({
 export const upsertPriceBookSchema = z.object({
   orgId: z.string().min(1),
   projectId: z.string().min(1),
-  priceBookId: z.string().optional(),
+  priceBookId: z.string().nullish(),
   name: z.string().min(2, 'Price book name is required').max(120),
   description: z.string().max(400).optional(),
   effectiveFrom: z.string().min(1, 'Effective date is required'),
@@ -652,7 +652,7 @@ export const createLeadSchema = z.object({
     'HOSTED_FORM',
     'WEBHOOK',
   ]),
-  campaign: z.string().max(120).optional(),
+  campaign: z.string().max(120).nullish(),
   budgetMinInr: z.coerce.number().nonnegative().optional(),
   budgetMaxInr: z.coerce.number().nonnegative().optional(),
   preferredLocation: z.string().max(120).optional(),

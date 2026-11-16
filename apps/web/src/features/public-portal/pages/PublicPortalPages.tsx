@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import {
   Building2,
   CalendarClock,
@@ -53,26 +53,54 @@ function usePublishedCatalog() {
 
   React.useEffect(() => {
     let active = true;
-    const load = async () => {
-      try {
-        const [pSnap, uSnap] = await Promise.all([
-          getDocs(query(collection(db, 'projects'), where('isPublicPublished', '==', true))),
-          getDocs(query(collection(db, 'units'), where('isPublicPublished', '==', true))),
-        ]);
-        if (!active) return;
-        setProjects(pSnap.docs.map((d) => d.data() as Project));
-        setUnits(uSnap.docs.map((d) => d.data() as Unit));
-      } catch {
-        if (!active) return;
-        setProjects([]);
-        setUnits([]);
-      } finally {
-        if (active) setLoading(false);
-      }
+    let fallbackTriggered = false;
+
+    const triggerServerFallback = () => {
+      if (fallbackTriggered || !active) return;
+      fallbackTriggered = true;
+      void callBackendFunction<Record<string, never>, { projects: Project[]; units: Unit[] }>(
+        'listPublicPublishedCatalog',
+        {}
+      )
+        .then((res) => {
+          if (!active) return;
+          setProjects(res.projects ?? []);
+          setUnits(res.units ?? []);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (active) setLoading(false);
+        });
     };
-    load();
+
+    const unsubProj = onSnapshot(
+      query(collection(db, 'projects'), where('isPublicPublished', '==', true)),
+      (snap) => {
+        if (!active) return;
+        setProjects(
+          snap.docs
+            .map((d) => d.data() as Project)
+            .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+        );
+        setLoading(false);
+      },
+      triggerServerFallback
+    );
+
+    const unsubUnits = onSnapshot(
+      query(collection(db, 'units'), where('isPublicPublished', '==', true)),
+      (snap) => {
+        if (!active) return;
+        setUnits(snap.docs.map((d) => d.data() as Unit));
+        setLoading(false);
+      },
+      triggerServerFallback
+    );
+
     return () => {
       active = false;
+      unsubProj();
+      unsubUnits();
     };
   }, []);
 
@@ -445,36 +473,57 @@ export function PublicProjectDetailsPage() {
     if (!lookupKey) return;
     let active = true;
     const load = async () => {
-      let resolvedProject: Project | null = null;
-      const directSnap = await getDoc(doc(db, 'projects', lookupKey));
-      if (directSnap.exists() && directSnap.data()?.isPublicPublished) {
-        resolvedProject = directSnap.data() as Project;
-      } else {
-        const slugSnap = await getDocs(
-          query(
-            collection(db, 'projects'),
-            where('slug', '==', lookupKey),
-            where('isPublicPublished', '==', true)
-          )
-        );
-        if (!slugSnap.empty) {
-          resolvedProject = slugSnap.docs[0]!.data() as Project;
+      try {
+        let resolvedProject: Project | null = null;
+        const directSnap = await getDoc(doc(db, 'projects', lookupKey));
+        if (directSnap.exists() && directSnap.data()?.isPublicPublished) {
+          resolvedProject = directSnap.data() as Project;
+        } else {
+          const slugSnap = await getDocs(
+            query(
+              collection(db, 'projects'),
+              where('slug', '==', lookupKey),
+              where('isPublicPublished', '==', true)
+            )
+          );
+          if (!slugSnap.empty) {
+            resolvedProject = slugSnap.docs[0]!.data() as Project;
+          }
         }
-      }
 
-      if (!active) return;
-      setProject(resolvedProject);
-      if (resolvedProject) {
-        const unitsSnap = await getDocs(
-          query(
-            collection(db, 'units'),
-            where('projectId', '==', resolvedProject.id),
-            where('isPublicPublished', '==', true)
-          )
-        );
-        if (active) setUnits(unitsSnap.docs.map((d) => d.data() as Unit));
-      } else {
-        setUnits([]);
+        if (!active) return;
+        setProject(resolvedProject);
+        if (resolvedProject) {
+          const unitsSnap = await getDocs(
+            query(
+              collection(db, 'units'),
+              where('projectId', '==', resolvedProject.id),
+              where('isPublicPublished', '==', true)
+            )
+          );
+          if (active) setUnits(unitsSnap.docs.map((d) => d.data() as Unit));
+        } else {
+          setUnits([]);
+        }
+      } catch {
+        try {
+          const fallback = await callBackendFunction<
+            Record<string, never>,
+            { projects: Project[]; units: Unit[] }
+          >('listPublicPublishedCatalog', {});
+          if (!active) return;
+          const found =
+            (fallback.projects ?? []).find(
+              (p) => p.id === lookupKey || p.slug === lookupKey
+            ) ?? null;
+          setProject(found);
+          setUnits(found ? (fallback.units ?? []).filter((u) => u.projectId === found.id) : []);
+        } catch {
+          if (active) {
+            setProject(null);
+            setUnits([]);
+          }
+        }
       }
     };
     void load();
@@ -575,14 +624,41 @@ export function PublicPropertyDetailsPage() {
 
   React.useEffect(() => {
     if (!lookupKey) return;
-    getDoc(doc(db, 'units', lookupKey)).then(async (s) => {
-      if (s.exists() && s.data()?.isPublicPublished) {
-        const u = s.data() as Unit;
-        setUnit(u);
-        const pSnap = await getDoc(doc(db, 'projects', u.projectId));
-        if (pSnap.exists()) setProject(pSnap.data() as Project);
+    let active = true;
+    const load = async () => {
+      try {
+        const s = await getDoc(doc(db, 'units', lookupKey));
+        if (!active) return;
+        if (s.exists() && s.data()?.isPublicPublished) {
+          const u = s.data() as Unit;
+          setUnit(u);
+          const pSnap = await getDoc(doc(db, 'projects', u.projectId));
+          if (active && pSnap.exists()) setProject(pSnap.data() as Project);
+        }
+      } catch {
+        try {
+          const fallback = await callBackendFunction<
+            Record<string, never>,
+            { projects: Project[]; units: Unit[] }
+          >('listPublicPublishedCatalog', {});
+          if (!active) return;
+          const u = (fallback.units ?? []).find((x) => x.id === lookupKey) ?? null;
+          setUnit(u);
+          setProject(
+            u ? ((fallback.projects ?? []).find((p) => p.id === u.projectId) ?? null) : null
+          );
+        } catch {
+          if (active) {
+            setUnit(null);
+            setProject(null);
+          }
+        }
       }
-    });
+    };
+    void load();
+    return () => {
+      active = false;
+    };
   }, [lookupKey]);
 
   const handleToggleSave = async () => {

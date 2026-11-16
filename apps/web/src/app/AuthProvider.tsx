@@ -5,7 +5,6 @@ import {
   doc,
   getDoc,
   onSnapshot,
-  orderBy,
   query,
   where,
 } from 'firebase/firestore';
@@ -24,6 +23,7 @@ import {
   isEmulatorMode,
   isFirebaseConfigured,
 } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -210,6 +210,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               pendingUnverifiedInvitationsCount?: number;
               orgMemberships: OrganizationMember[];
               organizations?: Organization[];
+              projectsByOrg?: Record<string, Project[]>;
+              entitlementsByOrg?: Record<string, TenantEntitlements>;
               partnerMemberships: PartnerMember[];
               partnerOrganizations?: PartnerOrganization[];
             }
@@ -235,6 +237,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           if (cancelled) return;
           setOrganizationsAndMemberships(orgs, activeMemberships);
+
+          const resolvedActiveOrgId = useTenantStore.getState().activeOrgId;
+          if (resolvedActiveOrgId) {
+            const serverProjs = synced.projectsByOrg?.[resolvedActiveOrgId];
+            if (serverProjs && serverProjs.length > 0) {
+              setProjects(serverProjs);
+            }
+            const serverEnt = synced.entitlementsByOrg?.[resolvedActiveOrgId];
+            if (serverEnt) {
+              setActiveEntitlements(serverEnt);
+            }
+          }
 
           if ((synced.partnerMemberships ?? []).length > 0) {
             const firstPartner = synced.partnerMemberships[0]!;
@@ -289,41 +303,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPartnerContext,
   ]);
 
-  // Live project list subscription for active organization
+  // Live project list subscription for active organization (composite-index-free + server fallback)
   React.useEffect(() => {
     if (!activeOrgId) {
       setProjects([]);
       return;
     }
 
-    const q = query(
-      collection(db, 'projects'),
-      where('orgId', '==', activeOrgId),
-      orderBy('createdAt', 'desc')
-    );
+    const isUnrestrictedAdmin =
+      isSuperAdmin ||
+      activeMember?.role === 'PLATFORM_SUPER_ADMIN' ||
+      activeMember?.role === 'BUILDER_ADMIN' ||
+      activeMember?.role === 'PROJECT_DIRECTOR' ||
+      !activeMember?.assignedProjectIds ||
+      activeMember.assignedProjectIds.length === 0;
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const rawList = snap.docs.map((d) => d.data() as Project);
-        const isUnrestrictedAdmin =
-          isSuperAdmin ||
-          activeMember?.role === 'PLATFORM_SUPER_ADMIN' ||
-          activeMember?.role === 'BUILDER_ADMIN' ||
-          activeMember?.role === 'PROJECT_DIRECTOR' ||
-          !activeMember?.assignedProjectIds ||
-          activeMember.assignedProjectIds.length === 0;
-        const filtered = isUnrestrictedAdmin
-          ? rawList
-          : rawList.filter((p) => activeMember.assignedProjectIds.includes(p.id));
-        setProjects(filtered);
-      },
-      () => {
-        setProjects([]);
-      }
-    );
-
-    return () => unsub();
+    return subscribeTenantCollection<Project>({
+      orgId: activeOrgId,
+      collectionName: 'projects',
+      filter: isUnrestrictedAdmin
+        ? undefined
+        : (p) => Boolean(activeMember?.assignedProjectIds.includes(p.id)),
+      sort: sortDescByIso<Project>('createdAt'),
+      onData: setProjects,
+    });
   }, [activeMember, activeOrgId, isSuperAdmin, setProjects]);
 
   // Live entitlements & prepaid wallets subscription for active organization
@@ -335,9 +338,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsub = onSnapshot(
       doc(db, 'entitlements', activeOrgId),
       (snap) => {
-        setActiveEntitlements(snap.exists() ? (snap.data() as TenantEntitlements) : null);
+        if (snap.exists()) {
+          setActiveEntitlements(snap.data() as TenantEntitlements);
+        }
       },
-      () => setActiveEntitlements(null)
+      () => {
+        // Keep server-hydrated entitlements if client snapshot encounters rule propagation delay
+      }
     );
     return () => unsub();
   }, [activeOrgId, setActiveEntitlements]);

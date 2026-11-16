@@ -7,6 +7,7 @@ import {
   type PartnerOrganization,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, db } from '@/lib/firebase';
+import { subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -71,14 +72,21 @@ export function ChannelPartnersPage() {
         where('authorizedOrgIds', 'array-contains', activeOrgId)
       ),
       (s) => setPartners(s.docs.map((d) => d.data() as PartnerOrganization)),
-      () => setPartners([])
+      () => {
+        void callBackendFunction<any, { items: PartnerOrganization[] }>(
+          'getOrganizationCollectionSnapshot',
+          { orgId: activeOrgId, collectionName: 'partner_organizations' }
+        )
+          .then((res) => setPartners(res.items ?? []))
+          .catch(() => setPartners([]));
+      }
     );
 
-    const uRegs = onSnapshot(
-      query(collection(db, 'lead_registrations'), where('orgId', '==', activeOrgId)),
-      (s) => setRegistrations(s.docs.map((d) => d.data() as LeadRegistration)),
-      () => setRegistrations([])
-    );
+    const uRegs = subscribeTenantCollection<LeadRegistration>({
+      orgId: activeOrgId,
+      collectionName: 'lead_registrations',
+      onData: setRegistrations,
+    });
 
     return () => {
       uPartners();

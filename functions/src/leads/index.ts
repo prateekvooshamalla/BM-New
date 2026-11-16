@@ -15,6 +15,7 @@ import {
 import { createLeadSchema } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
+import { parseCallableInput } from '../shared/validation';
 import { writeAuditEvent } from '../audit';
 
 /**
@@ -27,7 +28,7 @@ export async function ingestLeadService(
   actorRole: string,
   rawInput: unknown
 ): Promise<{ lead: Lead; deduplicated: boolean }> {
-  const input = createLeadSchema.parse(rawInput);
+  const input = parseCallableInput(createLeadSchema, rawInput);
   const nowIso = new Date().toISOString();
   const orgSnap = await db.collection('organizations').doc(input.orgId).get();
   const org = orgSnap.exists ? (orgSnap.data() as Organization) : null;
@@ -239,7 +240,7 @@ export async function updateLeadStageService(
 // --- Cloud Functions v2 Callables ---
 
 export const createLead = onCall(async (request) => {
-  const parsed = createLeadSchema.parse(request.data);
+  const parsed = parseCallableInput(createLeadSchema, request.data);
   const targetProjectId = parsed.projectId ?? parsed.preferredProjectIds[0] ?? null;
   const { actor, member } = await requireOrgPermission(
     request,

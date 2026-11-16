@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { where } from 'firebase/firestore';
 import {
   Download,
   FileSpreadsheet,
@@ -21,7 +21,8 @@ import {
   type LeadStage,
   type OrganizationMember,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -102,20 +103,18 @@ export function LeadsCrmPage() {
   React.useEffect(() => {
     if (!activeOrgId) return;
 
-    const uLeads = onSnapshot(
-      query(
-        collection(db, 'leads'),
-        where('orgId', '==', activeOrgId),
-        orderBy('updatedAt', 'desc')
-      ),
-      (s) => setLeads(s.docs.map((d) => d.data() as Lead)),
-      () => setLeads([])
-    );
+    const uLeads = subscribeTenantCollection<Lead>({
+      orgId: activeOrgId,
+      collectionName: 'leads',
+      sort: sortDescByIso<Lead>('updatedAt'),
+      onData: setLeads,
+    });
 
-    const uMembers = onSnapshot(
-      query(collection(db, 'organization_members'), where('orgId', '==', activeOrgId)),
-      (s) => setMembers(s.docs.map((d) => d.data() as OrganizationMember))
-    );
+    const uMembers = subscribeTenantCollection<OrganizationMember>({
+      orgId: activeOrgId,
+      collectionName: 'organization_members',
+      onData: setMembers,
+    });
 
     return () => {
       uLeads();
@@ -128,20 +127,14 @@ export function LeadsCrmPage() {
       setLeadActivities([]);
       return;
     }
-    const unsub = onSnapshot(
-      query(
-        collection(db, 'lead_activities'),
-        where('orgId', '==', activeOrgId),
-        where('leadId', '==', selectedLead.id)
-      ),
-      (s) =>
-        setLeadActivities(
-          s.docs
-            .map((d) => d.data() as LeadActivity)
-            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        )
-    );
-    return () => unsub();
+    return subscribeTenantCollection<LeadActivity>({
+      orgId: activeOrgId,
+      collectionName: 'lead_activities',
+      extraConstraints: [where('leadId', '==', selectedLead.id)],
+      filter: (a) => a.leadId === selectedLead.id,
+      sort: sortDescByIso<LeadActivity>('createdAt'),
+      onData: setLeadActivities,
+    });
   }, [activeOrgId, selectedLead]);
 
   const filteredLeads = React.useMemo(() => {

@@ -1,8 +1,8 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { CalendarClock, List, Plus } from 'lucide-react';
 import type { SiteVisit } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortAscByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -49,17 +49,13 @@ export function SiteVisitsPage() {
     if (!activeOrgId) return;
     if (!projectId && projects[0]) setProjectId(projects[0].id);
 
-    const unsub = onSnapshot(
-      query(
-        collection(db, 'site_visits'),
-        where('orgId', '==', activeOrgId),
-        orderBy('scheduledStartAt', 'asc')
-      ),
-      (s) => setVisits(s.docs.map((d) => d.data() as SiteVisit)),
-      () => setVisits([])
-    );
-    return () => unsub();
-  }, [activeOrgId, projects]);
+    return subscribeTenantCollection<SiteVisit>({
+      orgId: activeOrgId,
+      collectionName: 'site_visits',
+      sort: sortAscByIso<SiteVisit>('scheduledStartAt'),
+      onData: setVisits,
+    });
+  }, [activeOrgId, projectId, projects]);
 
   const handleSchedule = async (e: React.FormEvent) => {
     e.preventDefault();

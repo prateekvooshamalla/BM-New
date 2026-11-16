@@ -20,6 +20,7 @@ import {
 } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
+import { parseCallableInput } from '../shared/validation';
 import { createApprovalRequestService } from '../approvals';
 import { writeAuditEvent } from '../audit';
 
@@ -97,7 +98,7 @@ export async function savePriceBookDraftService(
   actorRole: string,
   rawInput: unknown
 ): Promise<PriceBook> {
-  const input = upsertPriceBookSchema.parse(rawInput);
+  const input = parseCallableInput(upsertPriceBookSchema, rawInput);
   const nowIso = new Date().toISOString();
 
   if (input.priceBookId) {
@@ -650,7 +651,7 @@ export async function upsertCostSheetTemplateService(
 // --- Cloud Functions v2 Callables ---
 
 export const savePriceBookDraft = onCall(async (request) => {
-  const parsed = upsertPriceBookSchema.parse(request.data);
+  const parsed = parseCallableInput(upsertPriceBookSchema, request.data);
   const { actor, member } = await requireOrgPermission(
     request,
     parsed.orgId,

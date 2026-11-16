@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import type { z } from 'zod';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import { formatInrCompact, type Lead } from '@bharat-makaan/shared';
@@ -46,12 +46,13 @@ export function LeadsScreen() {
   useEffect(() => {
     if (!activeOrgId) return;
     const unsub = onSnapshot(
-      query(
-        collection(mobileDb, 'leads'),
-        where('orgId', '==', activeOrgId),
-        orderBy('updatedAt', 'desc')
-      ),
-      (snap) => setLeads(snap.docs.map((d) => d.data() as Lead)),
+      query(collection(mobileDb, 'leads'), where('orgId', '==', activeOrgId)),
+      (snap) =>
+        setLeads(
+          snap.docs
+            .map((d) => d.data() as Lead)
+            .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        ),
       () => setLeads([])
     );
     return () => unsub();

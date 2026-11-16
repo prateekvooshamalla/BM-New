@@ -9,7 +9,9 @@ import {
 } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
+import { parseCallableInput } from '../shared/validation';
 import { writeAuditEvent } from '../audit';
+import { isAiFloorPlanStoragePath } from './ai-floorplan-path';
 
 export async function registerDocumentService(
   db: Firestore,
@@ -263,13 +265,33 @@ export async function createExpiringShareLinkService(
 // --- Cloud Functions v2 Callables ---
 
 export const registerDocument = onCall(async (request) => {
-  const parsed = registerDocumentMetadataSchema.parse(request.data);
-  const { actor, member } = await requireOrgPermission(
-    request,
-    parsed.orgId,
-    'documents:upload',
-    parsed.projectId
-  );
+  const parsed = parseCallableInput(registerDocumentMetadataSchema, request.data);
+  let actor: AuthenticatedActor;
+  let member: Awaited<ReturnType<typeof requireOrgPermission>>['member'];
+
+  try {
+    ({ actor, member } = await requireOrgPermission(
+      request,
+      parsed.orgId,
+      'documents:upload',
+      parsed.projectId
+    ));
+  } catch (error) {
+    if (
+      !isAiFloorPlanStoragePath(parsed) ||
+      !(error instanceof HttpsError) ||
+      error.code !== 'permission-denied'
+    ) {
+      throw error;
+    }
+    ({ actor, member } = await requireOrgPermission(
+      request,
+      parsed.orgId,
+      'ai:use',
+      parsed.projectId
+    ));
+  }
+
   return registerDocumentService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
 });
 
@@ -325,4 +347,38 @@ export const createDocumentShareLink = onCall(async (request) => {
     member?.role ?? 'PLATFORM_SUPER_ADMIN',
     input
   );
+});
+
+export const resolveSharedDocumentLink = onCall(async (request) => {
+  const schema = z.object({
+    tokenId: z.string().min(8).max(128),
+  });
+  const { tokenId } = schema.parse(request.data);
+
+  const snap = await adminDb.collection('documents').get();
+  for (const docSnap of snap.docs) {
+    const rec = docSnap.data() as DocumentRecord;
+    const link = (rec.shareLinks ?? []).find((l) => l.tokenId === tokenId && !l.revoked);
+    if (link) {
+      if (Date.parse(link.expiresAt) > Date.now()) {
+        return {
+          valid: true,
+          document: {
+            id: rec.id,
+            title: rec.title,
+            category: rec.category,
+            fileName: rec.fileName,
+            mimeType: rec.mimeType,
+            sizeBytes: rec.sizeBytes,
+            currentVersion: rec.currentVersion,
+            watermarkEnabled: rec.watermarkEnabled,
+            storagePath: rec.storagePath,
+          },
+          expiresAt: link.expiresAt,
+        };
+      }
+      return { valid: false, document: null };
+    }
+  }
+  return { valid: false, document: null };
 });

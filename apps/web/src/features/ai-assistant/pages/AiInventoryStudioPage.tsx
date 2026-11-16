@@ -1,12 +1,8 @@
 import * as React from 'react';
 import { PDFDocument } from 'pdf-lib';
 import {
-  collection,
   doc,
   onSnapshot,
-  orderBy,
-  query,
-  where,
 } from 'firebase/firestore';
 import {
   getDownloadURL,
@@ -30,6 +26,7 @@ import type {
   DocumentRecord,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, db, storage } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -94,27 +91,17 @@ export function AiInventoryStudioPage() {
       setProjectDocs([]);
       return;
     }
-    const q = query(
-      collection(db, 'documents'),
-      where('orgId', '==', activeOrgId),
-      where('projectId', '==', currentProjectId),
-      orderBy('createdAt', 'desc')
-    );
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs
-          .map((d) => d.data() as DocumentRecord)
-          .filter((d) =>
-            ['FLOOR_PLAN', 'TOWER_PLAN', 'UNIT_LAYOUT', 'MASTER_PLAN', 'BROCHURE'].includes(
-              d.category
-            )
-          );
-        setProjectDocs(list);
-      },
-      () => setProjectDocs([])
-    );
-    return () => unsub();
+    return subscribeTenantCollection<DocumentRecord>({
+      orgId: activeOrgId,
+      collectionName: 'documents',
+      projectId: currentProjectId,
+      filter: (d) =>
+        ['FLOOR_PLAN', 'TOWER_PLAN', 'UNIT_LAYOUT', 'MASTER_PLAN', 'BROCHURE'].includes(
+          d.category
+        ),
+      sort: sortDescByIso<DocumentRecord>('createdAt'),
+      onData: setProjectDocs,
+    });
   }, [activeOrgId, currentProjectId]);
 
   // Subscribe to active AI session & staged draft

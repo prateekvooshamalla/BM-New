@@ -48,7 +48,7 @@ export const sendAiMessageSchema = z.object({
   partnerOrgId: z.string().nullable().optional(),
   message: z.string().min(1, 'Message cannot be empty').max(4000),
   contextSnapshot: aiContextSnapshotSchema.optional(),
-  structuredAnswerPatch: z.record(z.string(), z.unknown()).optional(),
+  structuredAnswerPatch: z.record(z.string(), z.unknown()).nullish(),
 });
 
 export const analyzeAiFloorPlanDocumentsSchema = z.object({

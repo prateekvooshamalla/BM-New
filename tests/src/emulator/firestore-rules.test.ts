@@ -227,6 +227,36 @@ describe('Firebase Emulator — Multi-Tenant & AI Assistant Firestore Security R
         projectId: 'projB_public',
         orgId: 'orgB',
       });
+
+      // Documents with omitted optional fields (no `partnerOrgId`, no `isPublicPublished`, no `projectId`)
+      await db.collection('units').doc('unit_orgA_1').set({
+        id: 'unit_orgA_1',
+        orgId: 'orgA',
+        projectId: 'projA_private',
+        unitNumber: 'A-101',
+        status: 'AVAILABLE',
+      });
+
+      await db.collection('site_visits').doc('visit_orgA_1').set({
+        id: 'visit_orgA_1',
+        orgId: 'orgA',
+        projectId: 'projA_private',
+        customerName: 'Buyer Visit',
+      });
+
+      await db.collection('quotations').doc('quote_orgA_1').set({
+        id: 'quote_orgA_1',
+        orgId: 'orgA',
+        projectId: 'projA_private',
+        unitId: 'unit_orgA_1',
+      });
+
+      await db.collection('bookings').doc('booking_orgA_1').set({
+        id: 'booking_orgA_1',
+        orgId: 'orgA',
+        projectId: 'projA_private',
+        unitId: 'unit_orgA_1',
+      });
     });
   });
 
@@ -345,6 +375,38 @@ describe('Firebase Emulator — Multi-Tenant & AI Assistant Firestore Security R
         uid: 'customer1',
         unitId: 'secret_unit',
       })
+    );
+  });
+
+  it('allows org-scoped collection list queries across projects, units, leads, site_visits, quotations, and bookings when optional fields are omitted', async () => {
+    const billingAdminADb = testEnv.authenticatedContext('billingAdminA').firestore();
+    const anonDb = testEnv.unauthenticatedContext().firestore();
+
+    await assertSucceeds(
+      billingAdminADb.collection('projects').where('orgId', '==', 'orgA').get()
+    );
+    await assertSucceeds(
+      billingAdminADb.collection('units').where('orgId', '==', 'orgA').get()
+    );
+    await assertSucceeds(
+      billingAdminADb.collection('leads').where('orgId', '==', 'orgA').get()
+    );
+    await assertSucceeds(
+      billingAdminADb.collection('site_visits').where('orgId', '==', 'orgA').get()
+    );
+    await assertSucceeds(
+      billingAdminADb.collection('quotations').where('orgId', '==', 'orgA').get()
+    );
+    await assertSucceeds(
+      billingAdminADb.collection('bookings').where('orgId', '==', 'orgA').get()
+    );
+
+    // Public catalog list queries for published projects & units succeed without error
+    await assertSucceeds(
+      anonDb.collection('projects').where('isPublicPublished', '==', true).get()
+    );
+    await assertSucceeds(
+      anonDb.collection('units').where('isPublicPublished', '==', true).get()
     );
   });
 });

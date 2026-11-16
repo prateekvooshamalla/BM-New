@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { where } from 'firebase/firestore';
 import {
   Building2,
   Calculator,
@@ -24,12 +24,14 @@ import {
   type AuditEvent,
   type FacingDirection,
   type Floor,
+  type Project,
   type ProjectPhase,
   type Tower,
   type Unit,
   type UnitStatus,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -86,6 +88,7 @@ export function ProjectsAndInventoryPage() {
     projects,
     activeProjectId,
     activeProject,
+    setProjects,
     selectProject,
     setSelectedContextEntity,
     setAiDrawerOpen,
@@ -193,41 +196,33 @@ export function ProjectsAndInventoryPage() {
       return;
     }
 
-    const unsubPhases = onSnapshot(
-      query(
-        collection(db, 'project_phases'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) => setPhases(s.docs.map((d) => d.data() as ProjectPhase))
-    );
+    const unsubPhases = subscribeTenantCollection<ProjectPhase>({
+      orgId: activeOrgId,
+      collectionName: 'project_phases',
+      projectId: currentProjectId,
+      onData: setPhases,
+    });
 
-    const unsubTowers = onSnapshot(
-      query(
-        collection(db, 'towers'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) => setTowers(s.docs.map((d) => d.data() as Tower))
-    );
+    const unsubTowers = subscribeTenantCollection<Tower>({
+      orgId: activeOrgId,
+      collectionName: 'towers',
+      projectId: currentProjectId,
+      onData: setTowers,
+    });
 
-    const unsubFloors = onSnapshot(
-      query(
-        collection(db, 'floors'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) => setFloors(s.docs.map((d) => d.data() as Floor))
-    );
+    const unsubFloors = subscribeTenantCollection<Floor>({
+      orgId: activeOrgId,
+      collectionName: 'floors',
+      projectId: currentProjectId,
+      onData: setFloors,
+    });
 
-    const unsubUnits = onSnapshot(
-      query(
-        collection(db, 'units'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) => setUnits(s.docs.map((d) => d.data() as Unit))
-    );
+    const unsubUnits = subscribeTenantCollection<Unit>({
+      orgId: activeOrgId,
+      collectionName: 'units',
+      projectId: currentProjectId,
+      onData: setUnits,
+    });
 
     return () => {
       unsubPhases();
@@ -243,17 +238,14 @@ export function ProjectsAndInventoryPage() {
       setUnitAuditHistory([]);
       return;
     }
-    const unsub = onSnapshot(
-      query(
-        collection(db, 'audit_events'),
-        where('orgId', '==', activeOrgId),
-        where('entityId', '==', selectedUnit.id),
-        orderBy('createdAt', 'desc')
-      ),
-      (s) => setUnitAuditHistory(s.docs.map((d) => d.data() as AuditEvent)),
-      () => setUnitAuditHistory([])
-    );
-    return () => unsub();
+    return subscribeTenantCollection<AuditEvent>({
+      orgId: activeOrgId,
+      collectionName: 'audit_events',
+      extraConstraints: [where('entityId', '==', selectedUnit.id)],
+      filter: (ev) => ev.entityId === selectedUnit.id,
+      sort: sortDescByIso<AuditEvent>('createdAt'),
+      onData: setUnitAuditHistory,
+    });
   }, [activeOrgId, selectedUnit]);
 
   const filteredUnits = React.useMemo(() => {
@@ -319,7 +311,7 @@ export function ProjectsAndInventoryPage() {
     setBusy(true);
     setBannerMsg(null);
     try {
-      const created = await callBackendFunction<any, { id: string; name: string }>(
+      const created = await callBackendFunction<any, Project>(
         'createProject',
         {
           orgId: activeOrgId,
@@ -346,7 +338,8 @@ export function ProjectsAndInventoryPage() {
           listingIntent: 'BUY',
         }
       );
-      selectProject(created.id);
+      setProjects([created, ...projects.filter((p) => p.id !== created.id)]);
+      selectProject(created.id, 'SINGLE_PROJECT');
       setCreateProjectOpen(false);
       setProjName('');
       setProjCode('');
@@ -363,7 +356,7 @@ export function ProjectsAndInventoryPage() {
     if (!activeOrgId || !currentProjectId) return;
     setBusy(true);
     try {
-      await callBackendFunction('createPhase', {
+      const createdPhase = await callBackendFunction<any, ProjectPhase>('createPhase', {
         orgId: activeOrgId,
         projectId: currentProjectId,
         name: phaseName,
@@ -371,6 +364,7 @@ export function ProjectsAndInventoryPage() {
         sequence: phases.length + 1,
         constructionStatus: 'UNDER_CONSTRUCTION',
       });
+      setPhases((prev) => [...prev.filter((p) => p.id !== createdPhase.id), createdPhase]);
       setCreatePhaseOpen(false);
       setBannerMsg(`Added phase "${phaseName}".`);
     } catch (err) {
@@ -385,7 +379,7 @@ export function ProjectsAndInventoryPage() {
     if (!activeOrgId || !currentProjectId) return;
     setBusy(true);
     try {
-      await callBackendFunction('createTower', {
+      const createdTower = await callBackendFunction<any, Tower>('createTower', {
         orgId: activeOrgId,
         projectId: currentProjectId,
         name: towerName,
@@ -396,6 +390,7 @@ export function ProjectsAndInventoryPage() {
         podiumLevels: 1,
         unitsPerFloorTypical: 4,
       });
+      setTowers((prev) => [...prev.filter((t) => t.id !== createdTower.id), createdTower]);
       setCreateTowerOpen(false);
       setBannerMsg(`Created ${towerType} "${towerName}".`);
     } catch (err) {
@@ -411,7 +406,7 @@ export function ProjectsAndInventoryPage() {
     setBusy(true);
     try {
       const selectedTowerObj = towers.find((t) => t.id === unitTowerId);
-      await callBackendFunction('createUnit', {
+      const createdUnit = await callBackendFunction<any, Unit>('createUnit', {
         orgId: activeOrgId,
         projectId: currentProjectId,
         towerId: unitTowerId || null,
@@ -430,6 +425,7 @@ export function ProjectsAndInventoryPage() {
         listingMode: 'BUY',
         isPublicPublished: unitPublished,
       });
+      setUnits((prev) => [...prev.filter((u) => u.id !== createdUnit.id), createdUnit]);
       setCreateUnitOpen(false);
       setUnitNumber('');
       setBannerMsg(`Added unit ${unitNumber.toUpperCase()} to inventory.`);

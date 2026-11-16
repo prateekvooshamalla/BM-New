@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   Bar,
   BarChart,
@@ -27,6 +27,7 @@ import {
   type Unit,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, db } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -91,49 +92,77 @@ export function ReportsAndAuditPage() {
     if (!activeOrgId) return;
 
     const subs = [
-      onSnapshot(query(collection(db, 'units'), where('orgId', '==', activeOrgId)), (s) =>
-        setUnits(s.docs.map((d) => d.data() as Unit))
-      ),
-      onSnapshot(query(collection(db, 'price_revisions'), where('orgId', '==', activeOrgId)), (s) =>
-        setRevisions(s.docs.map((d) => d.data() as PriceRevision))
-      ),
-      onSnapshot(query(collection(db, 'leads'), where('orgId', '==', activeOrgId)), (s) =>
-        setLeads(s.docs.map((d) => d.data() as Lead))
-      ),
-      onSnapshot(query(collection(db, 'lead_activities'), where('orgId', '==', activeOrgId)), (s) =>
-        setActivities(s.docs.map((d) => d.data() as LeadActivity))
-      ),
-      onSnapshot(
-        query(collection(db, 'partner_organizations'), where('authorizedOrgIds', 'array-contains', activeOrgId)),
-        (s) => setPartners(s.docs.map((d) => d.data() as PartnerOrganization))
-      ),
-      onSnapshot(query(collection(db, 'site_visits'), where('orgId', '==', activeOrgId)), (s) =>
-        setVisits(s.docs.map((d) => d.data() as SiteVisit))
-      ),
-      onSnapshot(query(collection(db, 'quotations'), where('orgId', '==', activeOrgId)), (s) =>
-        setQuotations(s.docs.map((d) => d.data() as Quotation))
-      ),
-      onSnapshot(query(collection(db, 'bookings'), where('orgId', '==', activeOrgId)), (s) =>
-        setBookings(s.docs.map((d) => d.data() as Booking))
-      ),
-      onSnapshot(query(collection(db, 'collection_records'), where('orgId', '==', activeOrgId)), (s) =>
-        setCollections(s.docs.map((d) => d.data() as CollectionRecord))
-      ),
-      onSnapshot(query(collection(db, 'ai_usage_logs'), where('orgId', '==', activeOrgId)), (s) =>
-        setAiLogs(s.docs.map((d) => d.data() as AiUsageLog))
-      ),
-      onSnapshot(query(collection(db, 'conversations'), where('orgId', '==', activeOrgId)), (s) =>
-        setConversations(s.docs.map((d) => d.data() as Conversation))
-      ),
+      subscribeTenantCollection<Unit>({
+        orgId: activeOrgId,
+        collectionName: 'units',
+        onData: setUnits,
+      }),
+      subscribeTenantCollection<PriceRevision>({
+        orgId: activeOrgId,
+        collectionName: 'price_revisions',
+        onData: setRevisions,
+      }),
+      subscribeTenantCollection<Lead>({
+        orgId: activeOrgId,
+        collectionName: 'leads',
+        onData: setLeads,
+      }),
+      subscribeTenantCollection<LeadActivity>({
+        orgId: activeOrgId,
+        collectionName: 'lead_activities',
+        onData: setActivities,
+      }),
       onSnapshot(
         query(
-          collection(db, 'audit_events'),
-          where('orgId', '==', activeOrgId),
-          orderBy('createdAt', 'desc')
+          collection(db, 'partner_organizations'),
+          where('authorizedOrgIds', 'array-contains', activeOrgId)
         ),
-        (s) => setAudits(s.docs.map((d) => d.data() as AuditEvent)),
-        () => setAudits([])
+        (s) => setPartners(s.docs.map((d) => d.data() as PartnerOrganization)),
+        () => {
+          void callBackendFunction<any, { items: PartnerOrganization[] }>(
+            'getOrganizationCollectionSnapshot',
+            { orgId: activeOrgId, collectionName: 'partner_organizations' }
+          )
+            .then((res) => setPartners(res.items ?? []))
+            .catch(() => setPartners([]));
+        }
       ),
+      subscribeTenantCollection<SiteVisit>({
+        orgId: activeOrgId,
+        collectionName: 'site_visits',
+        onData: setVisits,
+      }),
+      subscribeTenantCollection<Quotation>({
+        orgId: activeOrgId,
+        collectionName: 'quotations',
+        onData: setQuotations,
+      }),
+      subscribeTenantCollection<Booking>({
+        orgId: activeOrgId,
+        collectionName: 'bookings',
+        onData: setBookings,
+      }),
+      subscribeTenantCollection<CollectionRecord>({
+        orgId: activeOrgId,
+        collectionName: 'collection_records',
+        onData: setCollections,
+      }),
+      subscribeTenantCollection<AiUsageLog>({
+        orgId: activeOrgId,
+        collectionName: 'ai_usage_logs',
+        onData: setAiLogs,
+      }),
+      subscribeTenantCollection<Conversation>({
+        orgId: activeOrgId,
+        collectionName: 'conversations',
+        onData: setConversations,
+      }),
+      subscribeTenantCollection<AuditEvent>({
+        orgId: activeOrgId,
+        collectionName: 'audit_events',
+        sort: sortDescByIso<AuditEvent>('createdAt'),
+        onData: setAudits,
+      }),
     ];
 
     return () => subs.forEach((u) => u());

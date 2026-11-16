@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { type ColumnDef } from '@tanstack/react-table';
 import { ArrowRightLeft, KeyRound, Shield, UserPlus, UserX } from 'lucide-react';
 import {
@@ -11,7 +10,8 @@ import {
   type PermissionKey,
   type RoleKey,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -73,16 +73,14 @@ export function StaffManagementPanel() {
       return;
     }
     setLoading(true);
-    const q = query(collection(db, 'organization_members'), where('orgId', '==', activeOrgId));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setMembers(snap.docs.map((d) => d.data() as OrganizationMember));
+    return subscribeTenantCollection<OrganizationMember>({
+      orgId: activeOrgId,
+      collectionName: 'organization_members',
+      onData: (items) => {
+        setMembers(items);
         setLoading(false);
       },
-      () => setLoading(false)
-    );
-    return () => unsub();
+    });
   }, [activeOrgId]);
 
   const handleRoleSelect = (role: RoleKey) => {

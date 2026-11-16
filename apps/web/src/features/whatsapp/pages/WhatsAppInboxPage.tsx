@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { where } from 'firebase/firestore';
 import { Check, Clock, MessageSquareText, Send, Sparkles } from 'lucide-react';
 import {
   isWithinMetaServiceWindow,
@@ -7,7 +7,8 @@ import {
   type IntegrationConfig,
   type Message,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortAscByIso, sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -44,51 +45,43 @@ export function WhatsAppInboxPage() {
   React.useEffect(() => {
     if (!activeOrgId) return;
 
-    const uInt = onSnapshot(
-      query(
-        collection(db, 'integrations'),
-        where('orgId', '==', activeOrgId),
-        where('provider', '==', 'WHATSAPP_CLOUD')
-      ),
-      (s) => setWaIntegration(s.docs[0] ? (s.docs[0].data() as IntegrationConfig) : null)
-    );
+    const uInt = subscribeTenantCollection<IntegrationConfig>({
+      orgId: activeOrgId,
+      collectionName: 'integrations',
+      extraConstraints: [where('provider', '==', 'WHATSAPP_CLOUD')],
+      filter: (i) => i.provider === 'WHATSAPP_CLOUD',
+      onData: (list) => setWaIntegration(list[0] ?? null),
+    });
 
-    const uConv = onSnapshot(
-      query(
-        collection(db, 'conversations'),
-        where('orgId', '==', activeOrgId),
-        orderBy('updatedAt', 'desc')
-      ),
-      (s) => {
-        const list = s.docs.map((d) => d.data() as Conversation);
+    const uConv = subscribeTenantCollection<Conversation>({
+      orgId: activeOrgId,
+      collectionName: 'conversations',
+      sort: sortDescByIso<Conversation>('updatedAt'),
+      onData: (list) => {
         setConversations(list);
         if (!selectedConvId && list[0]) setSelectedConvId(list[0].id);
       },
-      () => setConversations([])
-    );
+    });
 
     return () => {
       uInt();
       uConv();
     };
-  }, [activeOrgId]);
+  }, [activeOrgId, selectedConvId]);
 
   React.useEffect(() => {
     if (!activeOrgId || !selectedConvId) {
       setMessages([]);
       return;
     }
-    const uMsg = onSnapshot(
-      query(
-        collection(db, 'messages'),
-        where('orgId', '==', activeOrgId),
-        where('conversationId', '==', selectedConvId),
-        orderBy('createdAt', 'asc')
-      ),
-      (s) => setMessages(s.docs.map((d) => d.data() as Message)),
-      () => setMessages([])
-    );
-    return () => uMsg();
+    return subscribeTenantCollection<Message>({
+      orgId: activeOrgId,
+      collectionName: 'messages',
+      extraConstraints: [where('conversationId', '==', selectedConvId)],
+      filter: (m) => m.conversationId === selectedConvId,
+      sort: sortAscByIso<Message>('createdAt'),
+      onData: setMessages,
+    });
   }, [activeOrgId, selectedConvId]);
 
   const activeConv = conversations.find((c) => c.id === selectedConvId) ?? null;

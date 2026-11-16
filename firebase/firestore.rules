@@ -21,13 +21,17 @@ service cloud.firestore {
 
     function hasActiveOrgMembership(orgId) {
       return isSignedIn()
+        && orgId != null
         && exists(memberDocPath(orgId))
-        && get(memberDocPath(orgId)).data.status == 'ACTIVE';
+        && get(memberDocPath(orgId)).data.get('status', '') == 'ACTIVE';
     }
 
     function hasTenantOrgPermission(orgId, permission) {
       return hasActiveOrgMembership(orgId)
-        && permission in get(memberDocPath(orgId)).data.permissions;
+        && (
+          get(memberDocPath(orgId)).data.get('role', '') == 'BUILDER_ADMIN'
+          || permission in get(memberDocPath(orgId)).data.get('permissions', [])
+        );
     }
 
     function hasOrgPermission(orgId, permission) {
@@ -36,11 +40,14 @@ service cloud.firestore {
 
     function hasTenantProjectPermission(orgId, permission, projectId) {
       return hasActiveOrgMembership(orgId)
-        && permission in get(memberDocPath(orgId)).data.permissions
         && (
-          get(memberDocPath(orgId)).data.role in ['BUILDER_ADMIN', 'PROJECT_DIRECTOR']
-          || get(memberDocPath(orgId)).data.assignedProjectIds.size() == 0
-          || projectId in get(memberDocPath(orgId)).data.assignedProjectIds
+          get(memberDocPath(orgId)).data.get('role', '') == 'BUILDER_ADMIN'
+          || permission in get(memberDocPath(orgId)).data.get('permissions', [])
+        )
+        && (
+          get(memberDocPath(orgId)).data.get('role', '') in ['BUILDER_ADMIN', 'PROJECT_DIRECTOR']
+          || get(memberDocPath(orgId)).data.get('assignedProjectIds', []).size() == 0
+          || (projectId != null && projectId in get(memberDocPath(orgId)).data.get('assignedProjectIds', []))
         );
     }
 
@@ -54,8 +61,9 @@ service cloud.firestore {
 
     function isActivePartnerMember(partnerOrgId) {
       return isSignedIn()
+        && partnerOrgId != null
         && exists(partnerMemberDocPath(partnerOrgId))
-        && get(partnerMemberDocPath(partnerOrgId)).data.status == 'ACTIVE';
+        && get(partnerMemberDocPath(partnerOrgId)).data.get('status', '') == 'ACTIVE';
     }
 
     // =========================================================================
@@ -77,14 +85,15 @@ service cloud.firestore {
     // 1. organizations & 2. organization_members
     // =========================================================================
     match /organizations/{orgId} {
-      allow read: if isSuperAdmin() || hasActiveOrgMembership(orgId) || resource.data.status == 'ACTIVE';
-      // Organization creation & suspension go through Cloud Functions for atomic membership + subscription setup
+      allow read: if isSuperAdmin()
+        || hasActiveOrgMembership(orgId)
+        || resource.data.status == 'ACTIVE';
       allow create: if false;
       allow update: if isSuperAdmin()
         || (
           hasOrgPermission(orgId, 'org:manage')
-          && request.resource.data.subscriptionPlanId == resource.data.subscriptionPlanId
-          && request.resource.data.status == resource.data.status
+          && request.resource.data.get('subscriptionPlanId', '') == resource.data.get('subscriptionPlanId', '')
+          && request.resource.data.get('status', '') == resource.data.get('status', '')
         );
       allow delete: if false;
     }
@@ -93,7 +102,6 @@ service cloud.firestore {
       allow read: if isSuperAdmin()
         || (isSignedIn() && resource.data.uid == request.auth.uid)
         || hasOrgPermission(resource.data.orgId, 'staff:view');
-      // Privileged membership/permission writes execute through verified Cloud Functions + Audit Log
       allow create, update, delete: if false;
     }
 
@@ -101,30 +109,45 @@ service cloud.firestore {
     // 3. projects, 4. project_phases, 5. towers, 6. floors, 7. units
     // =========================================================================
     match /projects/{projectId} {
-      allow read: if resource.data.isPublicPublished == true
-        || hasProjectScopedPermission(resource.data.orgId, 'projects:view', projectId);
+      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', projectId)
+        || resource.data.isPublicPublished == true;
       allow create, update, delete: if false;
     }
 
     match /project_phases/{phaseId} {
-      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', resource.data.projectId);
+      allow read: if hasProjectScopedPermission(
+        resource.data.orgId,
+        'projects:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /towers/{towerId} {
-      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', resource.data.projectId);
+      allow read: if hasProjectScopedPermission(
+        resource.data.orgId,
+        'projects:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /floors/{floorId} {
-      allow read: if hasProjectScopedPermission(resource.data.orgId, 'projects:view', resource.data.projectId);
+      allow read: if hasProjectScopedPermission(
+        resource.data.orgId,
+        'projects:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /units/{unitId} {
-      allow read: if resource.data.isPublicPublished == true
-        || hasProjectScopedPermission(resource.data.orgId, 'inventory:view', resource.data.projectId);
-      // All unit creation & reservation/booking status transitions MUST use server transactions
+      allow read: if hasProjectScopedPermission(
+          resource.data.orgId,
+          'inventory:view',
+          resource.data.projectId
+        )
+        || resource.data.isPublicPublished == true;
       allow create, update, delete: if false;
     }
 
@@ -132,12 +155,20 @@ service cloud.firestore {
     // 8. parking_slots & 9. parking_allocations
     // =========================================================================
     match /parking_slots/{slotId} {
-      allow read: if hasProjectScopedPermission(resource.data.orgId, 'parking:view', resource.data.projectId);
+      allow read: if hasProjectScopedPermission(
+        resource.data.orgId,
+        'parking:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /parking_allocations/{allocationId} {
-      allow read: if hasProjectScopedPermission(resource.data.orgId, 'parking:view', resource.data.projectId);
+      allow read: if hasProjectScopedPermission(
+        resource.data.orgId,
+        'parking:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
@@ -145,13 +176,17 @@ service cloud.firestore {
     // 10. floor_plan_versions & 28. documents
     // =========================================================================
     match /floor_plan_versions/{versionId} {
-      allow read: if hasProjectScopedPermission(resource.data.orgId, 'documents:view', resource.data.projectId);
+      allow read: if hasProjectScopedPermission(
+        resource.data.orgId,
+        'documents:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /documents/{documentId} {
-      allow read: if resource.data.visibility == 'PUBLIC'
-        || hasOrgPermission(resource.data.orgId, 'documents:view');
+      allow read: if hasOrgPermission(resource.data.orgId, 'documents:view')
+        || resource.data.visibility == 'PUBLIC';
       allow create, update, delete: if false;
     }
 
@@ -160,53 +195,90 @@ service cloud.firestore {
     // pricing_overrides & cost_sheet_templates
     // =========================================================================
     match /price_books/{priceBookId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+        resource.data.orgId,
+        'pricing:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /price_rules/{ruleId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+        resource.data.orgId,
+        'pricing:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /price_revisions/{revisionId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+        resource.data.orgId,
+        'pricing:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
     match /pricing_overrides/{overrideId} {
-      allow read: if resource.data.projectId == null
-        ? hasTenantOrgPermission(resource.data.orgId, 'pricing:view')
-        : hasTenantProjectPermission(resource.data.orgId, 'pricing:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'pricing:view',
+          resource.data.projectId
+        )
+        || (
+          resource.data.projectId == null
+          && hasTenantOrgPermission(resource.data.orgId, 'pricing:view')
+        );
       allow create, update, delete: if false;
     }
 
     match /cost_sheet_templates/{templateId} {
-      allow read: if resource.data.projectId == null
-        ? (
-          hasTenantOrgPermission(resource.data.orgId, 'pricing:view')
-          || hasTenantOrgPermission(resource.data.orgId, 'quotations:view')
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'pricing:view',
+          resource.data.projectId
         )
-        : (
-          hasTenantProjectPermission(resource.data.orgId, 'pricing:view', resource.data.projectId)
-          || hasTenantProjectPermission(resource.data.orgId, 'quotations:view', resource.data.projectId)
+        || hasTenantProjectPermission(
+          resource.data.orgId,
+          'quotations:view',
+          resource.data.projectId
+        )
+        || (
+          resource.data.projectId == null
+          && (
+            hasTenantOrgPermission(resource.data.orgId, 'pricing:view')
+            || hasTenantOrgPermission(resource.data.orgId, 'quotations:view')
+          )
         );
       allow create, update, delete: if false;
     }
 
     match /payment_plans/{planId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'pricing:view', resource.data.projectId)
-        || hasTenantProjectPermission(resource.data.orgId, 'quotations:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'pricing:view',
+          resource.data.projectId
+        )
+        || hasTenantProjectPermission(
+          resource.data.orgId,
+          'quotations:view',
+          resource.data.projectId
+        );
       allow create, update, delete: if false;
     }
 
     // =========================================================================
-    // 15. quotations & 16. quotation_versions (Sensitive PII — Tenant / Partner only;
-    // Super Admin access restricted to audited server callable)
+    // 15. quotations & 16. quotation_versions
     // =========================================================================
     match /quotations/{quotationId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'quotations:view', resource.data.projectId)
-        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'quotations:view',
+          resource.data.projectId
+        )
+        || isActivePartnerMember(resource.data.partnerOrgId);
       allow create, update, delete: if false;
     }
 
@@ -222,17 +294,22 @@ service cloud.firestore {
       allow read: if (
           hasTenantOrgPermission(resource.data.orgId, 'leads:view_all')
           && (
-            get(memberDocPath(resource.data.orgId)).data.role in ['BUILDER_ADMIN', 'PROJECT_DIRECTOR']
-            || get(memberDocPath(resource.data.orgId)).data.assignedProjectIds.size() == 0
-            || ("projectId" in resource.data && resource.data.projectId in get(memberDocPath(resource.data.orgId)).data.assignedProjectIds)
-            || ("preferredProjectIds" in resource.data && resource.data.preferredProjectIds.hasAny(get(memberDocPath(resource.data.orgId)).data.assignedProjectIds))
+            get(memberDocPath(resource.data.orgId)).data.get('role', '') in ['BUILDER_ADMIN', 'PROJECT_DIRECTOR']
+            || get(memberDocPath(resource.data.orgId)).data.get('assignedProjectIds', []).size() == 0
+            || (
+              resource.data.projectId != null
+              && resource.data.projectId in get(memberDocPath(resource.data.orgId)).data.get('assignedProjectIds', [])
+            )
+            || resource.data.preferredProjectIds.hasAny(
+              get(memberDocPath(resource.data.orgId)).data.get('assignedProjectIds', [])
+            )
           )
         )
         || (
           hasTenantOrgPermission(resource.data.orgId, 'leads:view')
           && resource.data.assignedAgentUid == request.auth.uid
         )
-        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+        || isActivePartnerMember(resource.data.partnerOrgId);
       allow create, update, delete: if false;
     }
 
@@ -263,13 +340,17 @@ service cloud.firestore {
     }
 
     match /lead_registrations/{regId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'partners:view', resource.data.projectId)
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'partners:view',
+          resource.data.projectId
+        )
         || isActivePartnerMember(resource.data.partnerOrgId);
       allow create, update, delete: if false;
     }
 
     // =========================================================================
-    // 22. conversations, 23. messages, 24. site_visits (Sensitive Customer Comms)
+    // 22. conversations, 23. messages, 24. site_visits
     // =========================================================================
     match /conversations/{conversationId} {
       allow read: if hasTenantOrgPermission(resource.data.orgId, 'whatsapp:view');
@@ -282,8 +363,12 @@ service cloud.firestore {
     }
 
     match /site_visits/{visitId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'visits:view', resource.data.projectId)
-        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'visits:view',
+          resource.data.projectId
+        )
+        || isActivePartnerMember(resource.data.partnerOrgId);
       allow create, update, delete: if false;
     }
 
@@ -291,13 +376,21 @@ service cloud.firestore {
     // 25. bookings, 26. collection_records, 27. reconciliation_records
     // =========================================================================
     match /bookings/{bookingId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'bookings:view', resource.data.projectId)
-        || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId));
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'bookings:view',
+          resource.data.projectId
+        )
+        || isActivePartnerMember(resource.data.partnerOrgId);
       allow create, update, delete: if false;
     }
 
     match /collection_records/{collectionId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'collections:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+        resource.data.orgId,
+        'collections:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
@@ -310,9 +403,9 @@ service cloud.firestore {
     // 29. forms & 30. form_submissions
     // =========================================================================
     match /forms/{formId} {
-      allow read: if resource.data.status == 'PUBLISHED'
-        || hasTenantOrgPermission(resource.data.orgId, 'forms:manage')
-        || hasTenantOrgPermission(resource.data.orgId, 'leads:view');
+      allow read: if hasTenantOrgPermission(resource.data.orgId, 'forms:manage')
+        || hasTenantOrgPermission(resource.data.orgId, 'leads:view')
+        || resource.data.status == 'PUBLISHED';
       allow create, update, delete: if false;
     }
 
@@ -332,7 +425,9 @@ service cloud.firestore {
     }
 
     match /subscriptions/{orgId} {
-      allow read: if isSuperAdmin() || hasOrgPermission(orgId, 'billing:view') || hasOrgPermission(orgId, 'settings:view');
+      allow read: if isSuperAdmin()
+        || hasOrgPermission(orgId, 'billing:view')
+        || hasOrgPermission(orgId, 'settings:view');
       allow create, update, delete: if false;
     }
 
@@ -390,20 +485,30 @@ service cloud.firestore {
         && resource.data.uid == request.auth.uid
         && (
           hasActiveOrgMembership(resource.data.orgId)
-          || (resource.data.partnerOrgId != null && isActivePartnerMember(resource.data.partnerOrgId))
+          || isActivePartnerMember(resource.data.partnerOrgId)
         );
       allow create, update, delete: if false;
     }
 
     match /ai_inventory_drafts/{draftId} {
-      allow read: if resource.data.projectId == null
-        ? hasTenantOrgPermission(resource.data.orgId, 'inventory:view')
-        : hasTenantProjectPermission(resource.data.orgId, 'inventory:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+          resource.data.orgId,
+          'inventory:view',
+          resource.data.projectId
+        )
+        || (
+          resource.data.projectId == null
+          && hasTenantOrgPermission(resource.data.orgId, 'inventory:view')
+        );
       allow create, update, delete: if false;
     }
 
     match /ai_import_jobs/{jobId} {
-      allow read: if hasTenantProjectPermission(resource.data.orgId, 'inventory:view', resource.data.projectId);
+      allow read: if hasTenantProjectPermission(
+        resource.data.orgId,
+        'inventory:view',
+        resource.data.projectId
+      );
       allow create, update, delete: if false;
     }
 
@@ -415,13 +520,16 @@ service cloud.firestore {
 
     match /audit_events/{auditId} {
       allow read: if isSuperAdmin()
-        || (resource.data.orgId != 'PLATFORM' && hasOrgPermission(resource.data.orgId, 'audit:view'));
-      // Strictly append-only from server-side functions; NEVER mutable or deletable
+        || (
+          resource.data.orgId != 'PLATFORM'
+          && hasOrgPermission(resource.data.orgId, 'audit:view')
+        );
       allow create, update, delete: if false;
     }
 
     match /support_requests/{ticketId} {
-      allow read: if isSuperAdmin() || (isSignedIn() && resource.data.createdByUid == request.auth.uid);
+      allow read: if isSuperAdmin()
+        || (isSignedIn() && resource.data.createdByUid == request.auth.uid);
       allow create, update, delete: if false;
     }
   }

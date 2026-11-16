@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { ArrowLeftRight, CarFront, Link2, Plus, Unlink } from 'lucide-react';
 import {
   formatInr,
@@ -9,7 +8,8 @@ import {
   type ParkingSlotType,
   type Unit,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -76,34 +76,27 @@ export function ParkingPage() {
       return;
     }
 
-    const unsubSlots = onSnapshot(
-      query(
-        collection(db, 'parking_slots'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) => setSlots(s.docs.map((d) => d.data() as ParkingSlot))
-    );
+    const unsubSlots = subscribeTenantCollection<ParkingSlot>({
+      orgId: activeOrgId,
+      collectionName: 'parking_slots',
+      projectId: currentProjectId,
+      onData: setSlots,
+    });
 
-    const unsubUnits = onSnapshot(
-      query(
-        collection(db, 'units'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) => setUnits(s.docs.map((d) => d.data() as Unit))
-    );
+    const unsubUnits = subscribeTenantCollection<Unit>({
+      orgId: activeOrgId,
+      collectionName: 'units',
+      projectId: currentProjectId,
+      onData: setUnits,
+    });
 
-    const unsubAlloc = onSnapshot(
-      query(
-        collection(db, 'parking_allocations'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId),
-        orderBy('createdAt', 'desc')
-      ),
-      (s) => setAllocations(s.docs.map((d) => d.data() as ParkingAllocation)),
-      () => setAllocations([])
-    );
+    const unsubAlloc = subscribeTenantCollection<ParkingAllocation>({
+      orgId: activeOrgId,
+      collectionName: 'parking_allocations',
+      projectId: currentProjectId,
+      sort: sortDescByIso<ParkingAllocation>('createdAt'),
+      onData: setAllocations,
+    });
 
     return () => {
       unsubSlots();

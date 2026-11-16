@@ -11,6 +11,7 @@ import {
   type PartnerOrganization,
   type Project,
   type SiteVisit,
+  type TenantEntitlements,
   type Unit,
 } from '@bharat-makaan/shared';
 import { toggleCustomerSavedPropertySchema } from '@bharat-makaan/validation';
@@ -99,11 +100,15 @@ export async function syncMySessionMembershipsService(
     new Set(partnerMemberships.filter((p) => p.status === 'ACTIVE').map((p) => p.partnerOrgId))
   );
 
-  const [orgDocs, partnerOrgDocs] = await Promise.all([
+  const [orgDocs, partnerOrgDocs, projectSnapsByOrg, entitlementDocs] = await Promise.all([
     Promise.all(activeOrgIds.map((id) => db.collection('organizations').doc(id).get())),
     Promise.all(
       activePartnerOrgIds.map((id) => db.collection('partner_organizations').doc(id).get())
     ),
+    Promise.all(
+      activeOrgIds.map((oid) => db.collection('projects').where('orgId', '==', oid).get())
+    ),
+    Promise.all(activeOrgIds.map((oid) => db.collection('entitlements').doc(oid).get())),
   ]);
 
   const organizations = orgDocs
@@ -112,6 +117,31 @@ export async function syncMySessionMembershipsService(
   const partnerOrganizations = partnerOrgDocs
     .filter((s) => s.exists)
     .map((s) => s.data() as PartnerOrganization);
+
+  const projectsByOrg: Record<string, Project[]> = {};
+  activeOrgIds.forEach((oid, idx) => {
+    const mem = orgMemberships.find((m) => m.orgId === oid && m.status === 'ACTIVE');
+    const allProjs = (projectSnapsByOrg[idx]?.docs ?? [])
+      .map((d) => d.data() as Project)
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+    const isUnrestricted =
+      actor.isSuperAdmin ||
+      mem?.role === 'BUILDER_ADMIN' ||
+      mem?.role === 'PROJECT_DIRECTOR' ||
+      !mem?.assignedProjectIds ||
+      mem.assignedProjectIds.length === 0;
+    projectsByOrg[oid] = isUnrestricted
+      ? allProjs
+      : allProjs.filter((p) => mem.assignedProjectIds.includes(p.id));
+  });
+
+  const entitlementsByOrg: Record<string, TenantEntitlements> = {};
+  entitlementDocs.forEach((snap) => {
+    if (snap.exists) {
+      const ent = snap.data() as TenantEntitlements;
+      entitlementsByOrg[ent.orgId] = ent;
+    }
+  });
 
   return {
     uid: actor.uid,
@@ -122,6 +152,8 @@ export async function syncMySessionMembershipsService(
     pendingUnverifiedInvitationsCount,
     orgMemberships,
     organizations,
+    projectsByOrg,
+    entitlementsByOrg,
     partnerMemberships,
     partnerOrganizations,
   };

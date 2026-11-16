@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { FileText, Layers, Link2, Upload } from 'lucide-react';
 import type {
@@ -9,7 +8,8 @@ import type {
   FloorPlanVersion,
   Tower,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db, storage } from '@/lib/firebase';
+import { callBackendFunction, storage } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -83,35 +83,28 @@ export function DocumentsPage() {
   React.useEffect(() => {
     if (!activeOrgId) return;
 
-    const uDocs = onSnapshot(
-      query(
-        collection(db, 'documents'),
-        where('orgId', '==', activeOrgId),
-        orderBy('createdAt', 'desc')
-      ),
-      (s) => setDocs(s.docs.map((d) => d.data() as DocumentRecord)),
-      () => setDocs([])
-    );
+    const uDocs = subscribeTenantCollection<DocumentRecord>({
+      orgId: activeOrgId,
+      collectionName: 'documents',
+      sort: sortDescByIso<DocumentRecord>('createdAt'),
+      onData: setDocs,
+    });
 
     let uFp = () => {};
     let uTw = () => {};
     if (currentProjectId) {
-      uFp = onSnapshot(
-        query(
-          collection(db, 'floor_plan_versions'),
-          where('orgId', '==', activeOrgId),
-          where('projectId', '==', currentProjectId)
-        ),
-        (s) => setFloorPlans(s.docs.map((d) => d.data() as FloorPlanVersion))
-      );
-      uTw = onSnapshot(
-        query(
-          collection(db, 'towers'),
-          where('orgId', '==', activeOrgId),
-          where('projectId', '==', currentProjectId)
-        ),
-        (s) => setTowers(s.docs.map((d) => d.data() as Tower))
-      );
+      uFp = subscribeTenantCollection<FloorPlanVersion>({
+        orgId: activeOrgId,
+        collectionName: 'floor_plan_versions',
+        projectId: currentProjectId,
+        onData: setFloorPlans,
+      });
+      uTw = subscribeTenantCollection<Tower>({
+        orgId: activeOrgId,
+        collectionName: 'towers',
+        projectId: currentProjectId,
+        onData: setTowers,
+      });
     }
 
     return () => {

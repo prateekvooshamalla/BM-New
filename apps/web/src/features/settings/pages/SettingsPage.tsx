@@ -1,11 +1,12 @@
 import * as React from 'react';
-import { doc, onSnapshot, updateDoc, collection, query, where } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { multiFactor, TotpMultiFactorGenerator } from 'firebase/auth';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Building2, CreditCard, Plug, ShieldCheck, Sliders, Users, Wallet } from 'lucide-react';
 import { DEFAULT_SAAS_PLANS } from '@bharat-makaan/config';
 import { formatInr, type IntegrationConfig, type Subscription } from '@bharat-makaan/shared';
-import { auth, db } from '@/lib/firebase';
+import { auth, callBackendFunction, db } from '@/lib/firebase';
+import { subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -62,15 +63,28 @@ export function SettingsPage({ defaultTab = 'organization' }: { defaultTab?: str
 
   React.useEffect(() => {
     if (!activeOrgId) return;
-    const unsubSub = onSnapshot(doc(db, 'subscriptions', activeOrgId), (snap) => {
-      setSubscription(snap.exists() ? (snap.data() as Subscription) : null);
-    });
-    const unsubInt = onSnapshot(
-      query(collection(db, 'integrations'), where('orgId', '==', activeOrgId)),
+    const unsubSub = onSnapshot(
+      doc(db, 'subscriptions', activeOrgId),
       (snap) => {
-        setIntegrations(snap.docs.map((d) => d.data() as IntegrationConfig));
+        setSubscription(snap.exists() ? (snap.data() as Subscription) : null);
+      },
+      () => {
+        void callBackendFunction<
+          { orgId: string; collectionName: string },
+          { items: Subscription[] }
+        >('getOrganizationCollectionSnapshot', {
+          orgId: activeOrgId,
+          collectionName: 'subscriptions',
+        })
+          .then((res) => setSubscription(res.items?.[0] ?? null))
+          .catch(() => {});
       }
     );
+    const unsubInt = subscribeTenantCollection<IntegrationConfig>({
+      collectionName: 'integrations',
+      orgId: activeOrgId,
+      onData: setIntegrations,
+    });
     return () => {
       unsubSub();
       unsubInt();

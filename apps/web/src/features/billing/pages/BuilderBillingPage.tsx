@@ -1,12 +1,8 @@
 import * as React from 'react';
 import {
-  collection,
   doc,
   limit,
   onSnapshot,
-  orderBy,
-  query,
-  where,
 } from 'firebase/firestore';
 import {
   AlertTriangle,
@@ -37,6 +33,7 @@ import {
   type UsageLedgerEntry,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, db } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -131,58 +128,45 @@ export function BuilderBillingPage({
       () => {}
     );
 
-    const uInv = onSnapshot(
-      query(
-        collection(db, 'invoices'),
-        where('orgId', '==', activeOrgId),
-        orderBy('issuedAt', 'desc'),
-        limit(50)
-      ),
-      (snap) => setInvoices(snap.docs.map((d) => d.data() as SaasInvoice)),
-      () => setInvoices([])
-    );
+    const uInv = subscribeTenantCollection<SaasInvoice>({
+      orgId: activeOrgId,
+      collectionName: 'invoices',
+      extraConstraints: [limit(50)],
+      sort: sortDescByIso<SaasInvoice>('issuedAt'),
+      onData: setInvoices,
+    });
 
-    const uPay = onSnapshot(
-      query(
-        collection(db, 'payments'),
-        where('orgId', '==', activeOrgId),
-        orderBy('createdAt', 'desc'),
-        limit(50)
-      ),
-      (snap) => setPayments(snap.docs.map((d) => d.data() as SaasPayment)),
-      () => setPayments([])
-    );
+    const uPay = subscribeTenantCollection<SaasPayment>({
+      orgId: activeOrgId,
+      collectionName: 'payments',
+      extraConstraints: [limit(50)],
+      sort: sortDescByIso<SaasPayment>('createdAt'),
+      onData: setPayments,
+    });
 
-    const uOnb = onSnapshot(
-      query(
-        collection(db, 'onboarding_orders'),
-        where('orgId', '==', activeOrgId),
-        limit(20)
-      ),
-      (snap) => setOnboardingOrders(snap.docs.map((d) => d.data() as OnboardingOrder)),
-      () => setOnboardingOrders([])
-    );
+    const uOnb = subscribeTenantCollection<OnboardingOrder>({
+      orgId: activeOrgId,
+      collectionName: 'onboarding_orders',
+      extraConstraints: [limit(20)],
+      sort: sortDescByIso<OnboardingOrder>('createdAt'),
+      onData: setOnboardingOrders,
+    });
 
-    const uTop = onSnapshot(
-      query(
-        collection(db, 'credit_topups'),
-        where('orgId', '==', activeOrgId),
-        limit(30)
-      ),
-      (snap) => setTopupOrders(snap.docs.map((d) => d.data() as CreditTopupOrder)),
-      () => setTopupOrders([])
-    );
+    const uTop = subscribeTenantCollection<CreditTopupOrder>({
+      orgId: activeOrgId,
+      collectionName: 'credit_topups',
+      extraConstraints: [limit(30)],
+      sort: sortDescByIso<CreditTopupOrder>('createdAt'),
+      onData: setTopupOrders,
+    });
 
-    const uLed = onSnapshot(
-      query(
-        collection(db, 'usage_ledger'),
-        where('orgId', '==', activeOrgId),
-        orderBy('createdAt', 'desc'),
-        limit(100)
-      ),
-      (snap) => setLedgerEntries(snap.docs.map((d) => d.data() as UsageLedgerEntry)),
-      () => setLedgerEntries([])
-    );
+    const uLed = subscribeTenantCollection<UsageLedgerEntry>({
+      orgId: activeOrgId,
+      collectionName: 'usage_ledger',
+      extraConstraints: [limit(100)],
+      sort: sortDescByIso<UsageLedgerEntry>('createdAt'),
+      onData: setLedgerEntries,
+    });
 
     return () => {
       uSub();

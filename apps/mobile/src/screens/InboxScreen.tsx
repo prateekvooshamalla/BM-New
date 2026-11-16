@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
   isWithinMetaServiceWindow,
@@ -30,12 +30,13 @@ export function InboxScreen() {
   useEffect(() => {
     if (!activeOrgId) return;
     const unsub = onSnapshot(
-      query(
-        collection(mobileDb, 'conversations'),
-        where('orgId', '==', activeOrgId),
-        orderBy('updatedAt', 'desc')
-      ),
-      (snap) => setConversations(snap.docs.map((d) => d.data() as Conversation)),
+      query(collection(mobileDb, 'conversations'), where('orgId', '==', activeOrgId)),
+      (snap) =>
+        setConversations(
+          snap.docs
+            .map((d) => d.data() as Conversation)
+            .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        ),
       () => setConversations([])
     );
     return () => unsub();
@@ -50,10 +51,14 @@ export function InboxScreen() {
       query(
         collection(mobileDb, 'messages'),
         where('orgId', '==', activeOrgId),
-        where('conversationId', '==', selectedConv.id),
-        orderBy('createdAt', 'asc')
+        where('conversationId', '==', selectedConv.id)
       ),
-      (snap) => setMessages(snap.docs.map((d) => d.data() as Message))
+      (snap) =>
+        setMessages(
+          snap.docs
+            .map((d) => d.data() as Message)
+            .sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''))
+        )
     );
     return () => unsub();
   }, [activeOrgId, selectedConv]);

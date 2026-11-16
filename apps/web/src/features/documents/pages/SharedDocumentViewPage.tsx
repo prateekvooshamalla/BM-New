@@ -1,34 +1,32 @@
 import * as React from 'react';
 import { useParams } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
 import { FileText, ShieldAlert } from 'lucide-react';
 import type { DocumentRecord } from '@bharat-makaan/shared';
-import { db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export function SharedDocumentViewPage() {
   const { tokenId } = useParams<{ tokenId: string }>();
-  const [docRec, setDocRec] = React.useState<DocumentRecord | null>(null);
+  const [docRec, setDocRec] = React.useState<Partial<DocumentRecord> | null>(null);
   const [expiredOrInvalid, setExpiredOrInvalid] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    if (!tokenId) return;
-    getDocs(collection(db, 'documents'))
-      .then((snap) => {
-        for (const d of snap.docs) {
-          const rec = d.data() as DocumentRecord;
-          const link = rec.shareLinks?.find((l) => l.tokenId === tokenId && !l.revoked);
-          if (link) {
-            if (Date.parse(link.expiresAt) > Date.now()) {
-              setDocRec(rec);
-            } else {
-              setExpiredOrInvalid(true);
-            }
-            return;
-          }
+    if (!tokenId) {
+      setExpiredOrInvalid(true);
+      setLoading(false);
+      return;
+    }
+    callBackendFunction<{ tokenId: string }, { valid: boolean; document: Partial<DocumentRecord> | null }>(
+      'resolveSharedDocumentLink',
+      { tokenId }
+    )
+      .then((res) => {
+        if (res.valid && res.document) {
+          setDocRec(res.document);
+        } else {
+          setExpiredOrInvalid(true);
         }
-        setExpiredOrInvalid(true);
       })
       .catch(() => setExpiredOrInvalid(true))
       .finally(() => setLoading(false));

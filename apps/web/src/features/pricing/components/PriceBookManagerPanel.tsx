@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { where } from 'firebase/firestore';
 import {
   CartesianGrid,
   Line,
@@ -31,7 +31,8 @@ import {
   type PriceRevision,
   type Unit,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -162,56 +163,48 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
   React.useEffect(() => {
     if (!activeOrgId || !projectId) return;
 
-    const unsubPb = onSnapshot(
-      query(
-        collection(db, 'price_books'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', projectId),
-        orderBy('versionNumber', 'desc')
-      ),
-      (s) => {
-        const list = s.docs.map((d) => d.data() as PriceBook);
+    const unsubPb = subscribeTenantCollection<PriceBook>({
+      orgId: activeOrgId,
+      collectionName: 'price_books',
+      projectId,
+      sort: (a, b) => (b.versionNumber ?? 0) - (a.versionNumber ?? 0),
+      onData: (list) => {
         setPriceBooks(list);
         if (!selectedBookId && list[0]) {
           setSelectedBookId(list[0].id);
         }
       },
-      () => setPriceBooks([])
-    );
+    });
 
-    const unsubRev = onSnapshot(
-      query(
-        collection(db, 'price_revisions'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', projectId)
-      ),
-      (s) => setRevisions(s.docs.map((d) => d.data() as PriceRevision))
-    );
+    const unsubRev = subscribeTenantCollection<PriceRevision>({
+      orgId: activeOrgId,
+      collectionName: 'price_revisions',
+      projectId,
+      onData: setRevisions,
+    });
 
-    const unsubApp = onSnapshot(
-      query(
-        collection(db, 'approvals'),
-        where('orgId', '==', activeOrgId),
+    const unsubApp = subscribeTenantCollection<ApprovalRequest>({
+      orgId: activeOrgId,
+      collectionName: 'approvals',
+      extraConstraints: [
         where('entityType', '==', 'PRICE_BOOK'),
-        where('status', '==', 'PENDING')
-      ),
-      (s) => setApprovals(s.docs.map((d) => d.data() as ApprovalRequest))
-    );
+        where('status', '==', 'PENDING'),
+      ],
+      filter: (a) => a.entityType === 'PRICE_BOOK' && a.status === 'PENDING',
+      onData: setApprovals,
+    });
 
-    const unsubUnits = onSnapshot(
-      query(
-        collection(db, 'units'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', projectId)
-      ),
-      (s) => {
-        const list = s.docs.map((d) => d.data() as Unit);
+    const unsubUnits = subscribeTenantCollection<Unit>({
+      orgId: activeOrgId,
+      collectionName: 'units',
+      projectId,
+      onData: (list) => {
         setUnits(list);
         if (!previewUnitId && list[0]) {
           setPreviewUnitId(list[0].id);
         }
-      }
-    );
+      },
+    });
 
     return () => {
       unsubPb();

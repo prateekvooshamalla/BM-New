@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { Check, Plus, ReceiptIndianRupee, ShieldCheck, XCircle } from 'lucide-react';
 import {
   formatInr,
@@ -10,7 +9,8 @@ import {
   type Quotation,
   type ReconciliationRecord,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -78,51 +78,40 @@ export function BookingsAndCollectionsPage() {
   React.useEffect(() => {
     if (!activeOrgId || !currentProjectId) return;
 
-    const uBk = onSnapshot(
-      query(
-        collection(db, 'bookings'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId),
-        orderBy('createdAt', 'desc')
-      ),
-      (s) => setBookings(s.docs.map((d) => d.data() as Booking)),
-      () => setBookings([])
-    );
+    const uBk = subscribeTenantCollection<Booking>({
+      orgId: activeOrgId,
+      collectionName: 'bookings',
+      projectId: currentProjectId,
+      sort: sortDescByIso<Booking>('createdAt'),
+      onData: setBookings,
+    });
 
-    const uCol = onSnapshot(
-      query(collection(db, 'collection_records'), where('orgId', '==', activeOrgId)),
-      (s) =>
-        setCollections(
-          s.docs
-            .map((d) => d.data() as CollectionRecord)
-            .filter((c) => c.projectId === currentProjectId)
-        )
-    );
+    const uCol = subscribeTenantCollection<CollectionRecord>({
+      orgId: activeOrgId,
+      collectionName: 'collection_records',
+      filter: (c) => c.projectId === currentProjectId,
+      onData: setCollections,
+    });
 
-    const uRec = onSnapshot(
-      query(collection(db, 'reconciliation_records'), where('orgId', '==', activeOrgId)),
-      (s) => setReconciliations(s.docs.map((d) => d.data() as ReconciliationRecord)),
-      () => setReconciliations([])
-    );
+    const uRec = subscribeTenantCollection<ReconciliationRecord>({
+      orgId: activeOrgId,
+      collectionName: 'reconciliation_records',
+      onData: setReconciliations,
+    });
 
-    const uQt = onSnapshot(
-      query(
-        collection(db, 'quotations'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', currentProjectId)
-      ),
-      (s) =>
-        setQuotations(
-          s.docs
-            .map((d) => d.data() as Quotation)
-            .filter((q) => q.status === 'ISSUED' || q.status === 'SHARED')
-        )
-    );
+    const uQt = subscribeTenantCollection<Quotation>({
+      orgId: activeOrgId,
+      collectionName: 'quotations',
+      projectId: currentProjectId,
+      filter: (q) => q.status === 'ISSUED' || q.status === 'SHARED',
+      onData: setQuotations,
+    });
 
-    const uLd = onSnapshot(
-      query(collection(db, 'leads'), where('orgId', '==', activeOrgId)),
-      (s) => setLeads(s.docs.map((d) => d.data() as Lead))
-    );
+    const uLd = subscribeTenantCollection<Lead>({
+      orgId: activeOrgId,
+      collectionName: 'leads',
+      onData: setLeads,
+    });
 
     return () => {
       uBk();

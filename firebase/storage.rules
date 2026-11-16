@@ -34,6 +34,29 @@ service firebase.storage {
         );
     }
 
+    function projectDoc(orgId, projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)).data.orgId == orgId;
+    }
+
+    function hasProjectStoragePermission(orgId, projectId, perm) {
+      return projectDoc(orgId, projectId)
+        && (
+          isSuperAdmin()
+          || (
+            isSignedIn()
+            && isOrgActive(orgId)
+            && memberDoc(orgId).data != null
+            && memberDoc(orgId).data.status == 'ACTIVE'
+            && perm in memberDoc(orgId).data.permissions
+            && (
+              memberDoc(orgId).data.role in ['BUILDER_ADMIN', 'PROJECT_DIRECTOR']
+              || memberDoc(orgId).data.get('assignedProjectIds', []).size() == 0
+              || projectId in memberDoc(orgId).data.get('assignedProjectIds', [])
+            )
+          )
+        );
+    }
+
     function isAllowedContentType() {
       return request.resource.contentType.matches('application/pdf')
         || request.resource.contentType.matches('image/png')
@@ -49,6 +72,13 @@ service firebase.storage {
     match /public-listings/{orgId}/{projectId}/{allPaths=**} {
       allow read: if true;
       allow write: if hasOrgStoragePermission(orgId, 'documents:upload')
+        && isAllowedContentType()
+        && isWithinSizeLimit();
+    }
+
+    // AI floor-plan uploads are limited to users authorized for that project.
+    match /organizations/{orgId}/projects/{projectId}/ai-floorplans/{allPaths=**} {
+      allow write: if hasProjectStoragePermission(orgId, projectId, 'ai:use')
         && isAllowedContentType()
         && isWithinSizeLimit();
     }

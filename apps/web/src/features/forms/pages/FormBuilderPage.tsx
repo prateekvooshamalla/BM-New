@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import {
   DndContext,
   PointerSensor,
@@ -23,7 +22,8 @@ import type {
   FormSubmission,
   LeadCaptureForm,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { EmptyState } from '@/components/shared/EmptyState';
@@ -230,20 +230,20 @@ export function FormBuilderPage() {
   React.useEffect(() => {
     if (!activeOrgId) return;
 
-    const uForms = onSnapshot(
-      query(collection(db, 'forms'), where('orgId', '==', activeOrgId)),
-      (s) => {
-        const list = s.docs.map((d) => d.data() as LeadCaptureForm);
+    const uForms = subscribeTenantCollection<LeadCaptureForm>({
+      orgId: activeOrgId,
+      collectionName: 'forms',
+      onData: (list) => {
         setForms(list);
         if (!selectedForm && list[0]) setSelectedForm(list[0]);
-      }
-    );
+      },
+    });
 
-    const uSubs = onSnapshot(
-      query(collection(db, 'form_submissions'), where('orgId', '==', activeOrgId)),
-      (s) => setSubmissions(s.docs.map((d) => d.data() as FormSubmission)),
-      () => setSubmissions([])
-    );
+    const uSubs = subscribeTenantCollection<FormSubmission>({
+      orgId: activeOrgId,
+      collectionName: 'form_submissions',
+      onData: setSubmissions,
+    });
 
     return () => {
       uForms();

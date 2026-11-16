@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { where } from 'firebase/firestore';
 import {
   Check,
   Download,
@@ -24,7 +24,8 @@ import {
   type Tower,
   type Unit,
 } from '@bharat-makaan/shared';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { callBackendFunction } from '@/lib/firebase';
+import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { EmptyState } from '@/components/shared/EmptyState';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -106,59 +107,63 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
   React.useEffect(() => {
     if (!activeOrgId || !projectId) return;
 
-    const u1 = onSnapshot(
-      query(collection(db, 'towers'), where('orgId', '==', activeOrgId), where('projectId', '==', projectId)),
-      (s) => setTowers(s.docs.map((d) => d.data() as Tower))
-    );
-    const u2 = onSnapshot(
-      query(collection(db, 'units'), where('orgId', '==', activeOrgId), where('projectId', '==', projectId)),
-      (s) => {
-        const list = s.docs.map((d) => d.data() as Unit);
+    const u1 = subscribeTenantCollection<Tower>({
+      orgId: activeOrgId,
+      collectionName: 'towers',
+      projectId,
+      onData: setTowers,
+    });
+    const u2 = subscribeTenantCollection<Unit>({
+      orgId: activeOrgId,
+      collectionName: 'units',
+      projectId,
+      onData: (list) => {
         setUnits(list);
         if (!selectedUnitId && list[0]) setSelectedUnitId(list[0].id);
-      }
-    );
-    const u3 = onSnapshot(
-      query(collection(db, 'price_books'), where('orgId', '==', activeOrgId), where('projectId', '==', projectId)),
-      (s) => {
-        const approved = s.docs
-          .map((d) => d.data() as PriceBook)
-          .filter((b) => b.status === 'ACTIVE' || b.status === 'APPROVED');
+      },
+    });
+    const u3 = subscribeTenantCollection<PriceBook>({
+      orgId: activeOrgId,
+      collectionName: 'price_books',
+      projectId,
+      filter: (b) => b.status === 'ACTIVE' || b.status === 'APPROVED',
+      onData: (approved) => {
         setPriceBooks(approved);
         if (!selectedPbId && approved[0]) setSelectedPbId(approved[0].id);
-      }
-    );
-    const u4 = onSnapshot(
-      query(collection(db, 'payment_plans'), where('orgId', '==', activeOrgId), where('projectId', '==', projectId)),
-      (s) => {
-        const list = s.docs.map((d) => d.data() as PaymentPlan);
+      },
+    });
+    const u4 = subscribeTenantCollection<PaymentPlan>({
+      orgId: activeOrgId,
+      collectionName: 'payment_plans',
+      projectId,
+      onData: (list) => {
         setPaymentPlans(list);
         if (!selectedPlanId && list[0]) setSelectedPlanId(list[0].id);
-      }
-    );
-    const u5 = onSnapshot(
-      query(collection(db, 'parking_slots'), where('orgId', '==', activeOrgId), where('projectId', '==', projectId)),
-      (s) => setParkingSlots(s.docs.map((d) => d.data() as ParkingSlot))
-    );
-    const u6 = onSnapshot(
-      query(
-        collection(db, 'quotations'),
-        where('orgId', '==', activeOrgId),
-        where('projectId', '==', projectId),
-        orderBy('createdAt', 'desc')
-      ),
-      (s) => setQuotations(s.docs.map((d) => d.data() as Quotation)),
-      () => setQuotations([])
-    );
-    const u7 = onSnapshot(
-      query(
-        collection(db, 'approvals'),
-        where('orgId', '==', activeOrgId),
+      },
+    });
+    const u5 = subscribeTenantCollection<ParkingSlot>({
+      orgId: activeOrgId,
+      collectionName: 'parking_slots',
+      projectId,
+      onData: setParkingSlots,
+    });
+    const u6 = subscribeTenantCollection<Quotation>({
+      orgId: activeOrgId,
+      collectionName: 'quotations',
+      projectId,
+      sort: sortDescByIso<Quotation>('createdAt'),
+      onData: setQuotations,
+    });
+    const u7 = subscribeTenantCollection<ApprovalRequest>({
+      orgId: activeOrgId,
+      collectionName: 'approvals',
+      extraConstraints: [
         where('entityType', '==', 'QUOTATION_DISCOUNT'),
-        where('status', '==', 'PENDING')
-      ),
-      (s) => setDiscountApprovals(s.docs.map((d) => d.data() as ApprovalRequest))
-    );
+        where('status', '==', 'PENDING'),
+      ],
+      filter: (a) => a.entityType === 'QUOTATION_DISCOUNT' && a.status === 'PENDING',
+      onData: setDiscountApprovals,
+    });
 
     return () => {
       u1();

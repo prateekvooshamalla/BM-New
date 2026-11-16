@@ -703,3 +703,20 @@ export const setProjectLifecycleStatus = onCall(async (request) => {
     parsed
   );
 });
+
+/**
+ * Public read-only catalog returning strictly `isPublicPublished === true`
+ * projects and units for the Customer Property Portal.
+ */
+export const listPublicPublishedCatalog = onCall(async () => {
+  const [pSnap, uSnap] = await Promise.all([
+    adminDb.collection('projects').where('isPublicPublished', '==', true).limit(200).get(),
+    adminDb.collection('units').where('isPublicPublished', '==', true).limit(500).get(),
+  ]);
+  return {
+    projects: pSnap.docs
+      .map((d) => d.data() as Project)
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+    units: uSnap.docs.map((d) => d.data()),
+  };
+});

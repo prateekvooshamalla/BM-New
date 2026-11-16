@@ -5,7 +5,6 @@ import {
   doc,
   limit,
   onSnapshot,
-  orderBy,
   query,
   where,
 } from 'firebase/firestore';
@@ -180,13 +179,16 @@ export function AiAssistantDock({ partnerContext }: AiAssistantDockProps) {
       collection(db, 'ai_sessions'),
       where('orgId', '==', effectiveOrgId),
       where('uid', '==', uid),
-      orderBy('updatedAt', 'desc'),
-      limit(20)
+      limit(30)
     );
     const unsub = onSnapshot(
       q,
       (snap) => {
-        setHistorySessions(snap.docs.map((d) => d.data() as AiAssistantSession));
+        setHistorySessions(
+          snap.docs
+            .map((d) => d.data() as AiAssistantSession)
+            .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        );
       },
       () => setHistorySessions([])
     );

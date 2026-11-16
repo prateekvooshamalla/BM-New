@@ -18,6 +18,7 @@ import {
   updateAiInventoryDraftSchema,
 } from '@bharat-makaan/validation';
 import type { AuthenticatedActor } from '../shared/auth-guard';
+import { parseCallableInput } from '../shared/validation';
 import { writeAuditEvent } from '../audit';
 import {
   enforceAiRateLimit,
@@ -446,7 +447,7 @@ export async function sendAiAssistantMessageService(
   replyMessage: AiSessionMessage;
   draft: AiInventoryDraft | null;
 }> {
-  const input = sendAiMessageSchema.parse(rawInput);
+  const input = parseCallableInput(sendAiMessageSchema, rawInput);
 
   await enforceAiRateLimit(db, input.orgId, actor.uid);
 

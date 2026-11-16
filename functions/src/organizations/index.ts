@@ -1,5 +1,5 @@
 import type { Firestore } from 'firebase-admin/firestore';
-import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
 import {
   DEFAULT_SAAS_PLANS,
   GLOBAL_COUNTRIES,
@@ -11,6 +11,7 @@ import {
   normalizeEmail,
   type Organization,
   type OrganizationMember,
+  type PermissionKey,
   type Subscription,
   type TenantEntitlements,
 } from '@bharat-makaan/shared';
@@ -28,6 +29,10 @@ import {
   type AuthenticatedActor,
 } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import {
+  filterWorkspaceSnapshotRecords,
+  getWorkspaceCollectionAccess,
+} from './collection-snapshot-access';
 
 function slugify(name: string): string {
   return name
@@ -591,6 +596,171 @@ export const updateOrganizationSettings = onCall(async (request) => {
     member?.role ?? 'PLATFORM_SUPER_ADMIN',
     parsed
   );
+});
+
+async function requireWorkspaceCollectionPermission(
+  request: CallableRequest<unknown>,
+  orgId: string,
+  permissions: readonly PermissionKey[],
+  projectId: string | null
+): Promise<{
+  actor: AuthenticatedActor;
+  member: OrganizationMember | null;
+  permission: PermissionKey;
+}> {
+  let lastPermissionError: HttpsError | undefined;
+
+  for (const permission of permissions) {
+    try {
+      const { actor, member } = await requireOrgPermission(
+        request,
+        orgId,
+        permission,
+        projectId,
+        { isReadOrBillingOperation: true }
+      );
+      return { actor, member, permission };
+    } catch (error) {
+      if (!(error instanceof HttpsError) || error.code !== 'permission-denied') {
+        throw error;
+      }
+      lastPermissionError = error;
+    }
+  }
+
+  throw (
+    lastPermissionError ??
+    new HttpsError('permission-denied', 'Missing required workspace collection permission.')
+  );
+}
+
+export async function getOrganizationCollectionSnapshotService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  member: OrganizationMember | null,
+  params: {
+    orgId: string;
+    collectionName: string;
+    projectId?: string | null;
+    authorizedPermission: PermissionKey;
+  }
+): Promise<{ items: Array<Record<string, unknown>> }> {
+  const orgId = params.orgId.trim();
+  const collectionName = params.collectionName.trim();
+  const projectId = params.projectId ? params.projectId.trim() : null;
+  const access = getWorkspaceCollectionAccess(collectionName);
+
+  if (!orgId || !access) {
+    throw new HttpsError('invalid-argument', 'Unsupported workspace collection query.');
+  }
+
+  if (
+    collectionName === 'subscriptions' ||
+    collectionName === 'entitlements'
+  ) {
+    const docSnap = await db.collection(collectionName).doc(orgId).get();
+    const records = docSnap.exists
+      ? [{ id: docSnap.id, data: docSnap.data() as Record<string, unknown> }]
+      : [];
+    return { items: records.map((record) => record.data) };
+  }
+
+  if (collectionName === 'partner_organizations') {
+    const allPartnersSnap = await db.collection('partner_organizations').limit(300).get();
+    const partnerRecords = allPartnersSnap.docs
+      .filter((doc) => {
+        const partner = doc.data();
+        return (
+          (Array.isArray(partner.authorizedOrgIds) &&
+            partner.authorizedOrgIds.includes(orgId)) ||
+          Boolean(
+            partner.builderScopes &&
+              typeof partner.builderScopes === 'object' &&
+              (partner.builderScopes as Record<string, unknown>)[orgId]
+          )
+        );
+      })
+      .map((doc) => ({ id: doc.id, data: doc.data() as Record<string, unknown> }));
+    return { items: partnerRecords.map((record) => record.data) };
+  }
+
+  let records: Array<{ id: string; data: Record<string, unknown> }>;
+  if (collectionName === 'projects' && projectId) {
+    const projectSnap = await db.collection(collectionName).doc(projectId).get();
+    records =
+      projectSnap.exists && projectSnap.data()?.orgId === orgId
+        ? [{ id: projectSnap.id, data: projectSnap.data() as Record<string, unknown> }]
+        : [];
+  } else {
+    let q = db.collection(collectionName).where('orgId', '==', orgId);
+    if (projectId) {
+      q = q.where('projectId', '==', projectId);
+    }
+    const snap = await q.limit(500).get();
+    records = snap.docs.map((doc) => ({
+      id: doc.id,
+      data: doc.data() as Record<string, unknown>,
+    }));
+  }
+
+  const allowedProjectIds =
+    actor.isSuperAdmin ||
+    member?.role === 'BUILDER_ADMIN' ||
+    member?.role === 'PROJECT_DIRECTOR' ||
+    !Array.isArray(member?.assignedProjectIds) ||
+    member.assignedProjectIds.length === 0;
+  const filteredRecords = filterWorkspaceSnapshotRecords(collectionName, records, {
+    actorUid: actor.uid,
+    authorizedPermission: params.authorizedPermission,
+    allowedProjectIds: allowedProjectIds ? null : member.assignedProjectIds,
+  });
+  return { items: filteredRecords.map((record) => record.data) };
+}
+
+/**
+ * Resilient authenticated tenant collection reader used whenever client-side
+ * real-time snapshots need an authoritative server-side read (e.g. during index
+ * creation or cold rule propagation), strictly enforcing tenant membership & RBAC.
+ */
+export const getOrganizationCollectionSnapshot = onCall(async (request) => {
+  const data = (request.data ?? {}) as {
+    orgId?: string;
+    collectionName?: string;
+    projectId?: string | null;
+  };
+  const orgId = typeof data.orgId === 'string' ? data.orgId.trim() : '';
+  const collectionName =
+    typeof data.collectionName === 'string' ? data.collectionName.trim() : '';
+  if (
+    data.projectId !== undefined &&
+    data.projectId !== null &&
+    typeof data.projectId !== 'string'
+  ) {
+    throw new HttpsError('invalid-argument', 'projectId must be a string or null.');
+  }
+  const projectId =
+    typeof data.projectId === 'string' && data.projectId.trim()
+      ? data.projectId.trim()
+      : null;
+  const access = getWorkspaceCollectionAccess(collectionName);
+
+  if (!orgId || !access) {
+    throw new HttpsError('invalid-argument', 'Unsupported workspace collection query.');
+  }
+
+  const { actor, member, permission } = await requireWorkspaceCollectionPermission(
+    request,
+    orgId,
+    access.permissions,
+    access.projectScoped ? projectId : null
+  );
+
+  return getOrganizationCollectionSnapshotService(adminDb, actor, member, {
+    orgId,
+    collectionName,
+    projectId,
+    authorizedPermission: permission,
+  });
 });
 
 export * from './super-admin';
