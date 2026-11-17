@@ -143,6 +143,8 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
   const [pbEffective, setPbEffective] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [pbExpiry, setPbExpiry] = React.useState('');
   const [baseRate, setBaseRate] = React.useState('10500');
+  const [flatSizePickerOpen, setFlatSizePickerOpen] = React.useState(false);
+  const [selectedBaselineSource, setSelectedBaselineSource] = React.useState<string | null>(null);
   const [floorRiseEnabled, setFloorRiseEnabled] = React.useState(true);
   const [floorRiseStart, setFloorRiseStart] = React.useState('5');
   const [floorRiseRate, setFloorRiseRate] = React.useState('50');
@@ -159,6 +161,60 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
   const [maxAutoDiscount, setMaxAutoDiscount] = React.useState('2');
   const [internalNotes, setInternalNotes] = React.useState('');
   const [lineItems, setLineItems] = React.useState<CostSheetLineItemRule[]>(INITIAL_LINE_ITEMS);
+
+  const inventoryFlatSizes = React.useMemo(() => {
+    const map = new Map<string, {
+      unitType: string;
+      bhk: string;
+      saleableAreaSqft: number;
+      carpetAreaSqft: number;
+      baseRatePerSqft: number;
+      unitsCount: number;
+    }>();
+    for (const u of units) {
+      const key = `${u.unitType}_${u.bhk}_${u.saleableAreaSqft}_${u.baseRatePerSqft}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.unitsCount++;
+      } else {
+        map.set(key, {
+          unitType: u.unitType,
+          bhk: u.bhk,
+          saleableAreaSqft: u.saleableAreaSqft,
+          carpetAreaSqft: u.carpetAreaSqft,
+          baseRatePerSqft: u.baseRatePerSqft,
+          unitsCount: 1,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.saleableAreaSqft - b.saleableAreaSqft);
+  }, [units]);
+
+  const handleGeneratePricing = () => {
+    if (inventoryFlatSizes.length === 0) {
+      setBanner('No inventory units found in this project. Please create or bulk-generate units first to establish baseline pricing.');
+      return;
+    }
+    if (inventoryFlatSizes.length === 1) {
+      const item = inventoryFlatSizes[0];
+      setBaseRate(String(item.baseRatePerSqft));
+      setSelectedBaselineSource(`${item.bhk} (${item.saleableAreaSqft} sq.ft.) @ ₹${item.baseRatePerSqft.toLocaleString('en-IN')}/sq.ft.`);
+      setBanner(`Applied v1 inventory base price ₹${item.baseRatePerSqft.toLocaleString('en-IN')}/sq.ft. from ${item.bhk} (${item.saleableAreaSqft} sq.ft.).`);
+      return;
+    }
+    setFlatSizePickerOpen(true);
+  };
+
+  const handleApplyFlatSizeRate = (item: {
+    bhk: string;
+    saleableAreaSqft: number;
+    baseRatePerSqft: number;
+  }) => {
+    setBaseRate(String(item.baseRatePerSqft));
+    setSelectedBaselineSource(`${item.bhk} (${item.saleableAreaSqft} sq.ft.) @ ₹${item.baseRatePerSqft.toLocaleString('en-IN')}/sq.ft.`);
+    setFlatSizePickerOpen(false);
+    setBanner(`Applied v1 inventory base price ₹${item.baseRatePerSqft.toLocaleString('en-IN')}/sq.ft. from ${item.bhk} (${item.saleableAreaSqft} sq.ft.).`);
+  };
 
   React.useEffect(() => {
     if (!activeOrgId || !projectId) return;
@@ -801,8 +857,25 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
 
             <div className="grid gap-3 sm:grid-cols-4">
               <div className="space-y-1">
-                <Label>Base Rate / sq.ft. (INR) *</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Base Rate / sq.ft. (INR) *</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-[11px] px-2 gap-1 text-primary border-primary/30 hover:bg-primary/5"
+                    onClick={handleGeneratePricing}
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Generate Pricing
+                  </Button>
+                </div>
                 <Input type="number" required value={baseRate} onChange={(e) => setBaseRate(e.target.value)} />
+                {selectedBaselineSource && (
+                  <p className="text-[11px] text-emerald-600 font-medium">
+                    ✓ From {selectedBaselineSource}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label>Floor Rise Start Floor</Label>
@@ -840,15 +913,45 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
                 <Label>Maintenance/Legal GST (%)</Label>
                 <Input type="number" step="0.1" value={serviceGst} onChange={(e) => setServiceGst(e.target.value)} />
               </div>
-              <div className="space-y-1">
-                <Label>Max Auto Discount (%)</Label>
-                <Input type="number" step="0.1" value={maxAutoDiscount} onChange={(e) => setMaxAutoDiscount(e.target.value)} />
-              </div>
-              <div className="flex items-end pb-2">
+              <div className="flex items-end pb-2 sm:col-span-2">
                 <label className="flex items-center gap-2 text-xs">
                   <Switch checked={floorRiseEnabled} onCheckedChange={setFloorRiseEnabled} />
                   Enable Floor Rise
                 </label>
+              </div>
+            </div>
+
+            {/* Dedicated Discount Governance Section */}
+            <div className="rounded-lg border border-border bg-muted/30 p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs font-semibold flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    Discount Governance & Delegation Policy
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    Set clear boundary controls for executive approvals and sales negotiations.
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 items-center">
+                <div className="space-y-1">
+                  <Label className="text-xs">Max Sales Auto-Discount (%) without Approval</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    max={50}
+                    value={maxAutoDiscount}
+                    onChange={(e) => setMaxAutoDiscount(e.target.value)}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Sales reps can issue up to {maxAutoDiscount}% discount directly on cost sheets.
+                  </p>
+                </div>
+                <div className="rounded-md border border-amber-200 bg-amber-50/60 p-2.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                  <span className="font-semibold">Approval Guardrail:</span> Quotations exceeding {maxAutoDiscount}% discount automatically trigger a two-party Director / Commercial Head approval requirement before the PDF can be finalized or signed.
+                </div>
               </div>
             </div>
 
@@ -948,6 +1051,64 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Flat Size Baseline Picker Dialog */}
+      <Dialog open={flatSizePickerOpen} onOpenChange={setFlatSizePickerOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              Generate Pricing from Inventory Baseline
+            </DialogTitle>
+            <DialogDescription>
+              Select an inventory flat size. The base rate per sq.ft. configured during inventory upload will be populated as the Version 1 baseline for this Price Book.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            {inventoryFlatSizes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No units found in project inventory.</p>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {inventoryFlatSizes.map((item) => (
+                  <div
+                    key={`${item.unitType}_${item.bhk}_${item.saleableAreaSqft}`}
+                    className="flex items-center justify-between p-3 rounded-lg border border-border bg-card hover:bg-accent/40 transition-colors"
+                  >
+                    <div>
+                      <div className="font-semibold text-sm">
+                        {item.bhk} ({item.unitType})
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {item.saleableAreaSqft.toLocaleString('en-IN')} sq.ft. primary | {item.carpetAreaSqft.toLocaleString('en-IN')} sq.ft. carpet | {item.unitsCount} units
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <div className="text-xs text-muted-foreground">v1 Base Rate</div>
+                        <div className="text-base font-bold text-primary">
+                          ₹{item.baseRatePerSqft.toLocaleString('en-IN')}<span className="text-xs font-normal">/sq.ft.</span>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => handleApplyFlatSizeRate(item)}
+                      >
+                        Take This Price
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFlatSizePickerOpen(false)}>
+              Cancel
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

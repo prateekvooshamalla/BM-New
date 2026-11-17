@@ -321,6 +321,41 @@ export const createUnitSchema = z
     path: ['carpetAreaSqft'],
   });
 
+export const bulkGenerateUnitsSchema = z.object({
+  orgId: z.string().min(1),
+  projectId: z.string().min(1),
+  towerId: z.string().nullable().optional(),
+  towerCode: z.string().min(1),
+  towerName: z.string().optional(),
+  unitType: unitTypeSchema.default('APARTMENT'),
+  startFloor: z.coerce.number().int().min(0).max(200),
+  endFloor: z.coerce.number().int().min(0).max(200),
+  unitsPerFloor: z.coerce.number().int().min(1).max(50),
+  floorPlanStoragePath: z.string().max(500).optional(),
+  startUnitNumber: z.coerce.number().int().min(1).max(99).default(1),
+  bhk: z.string().min(1),
+  saleableAreaSqft: z.coerce.number().positive('Saleable area must be positive'),
+  carpetAreaSqft: z.coerce.number().positive('Carpet area must be positive'),
+  facing: z.enum([
+    'EAST',
+    'WEST',
+    'NORTH',
+    'SOUTH',
+    'NORTH_EAST',
+    'NORTH_WEST',
+    'SOUTH_EAST',
+    'SOUTH_WEST',
+  ]).default('EAST'),
+  baseRatePerSqft: z.coerce.number().nonnegative('Base rate must be >= 0'),
+  parkingEntitlementCount: z.coerce.number().int().min(0).max(20).default(1),
+  isCorner: z.boolean().default(false),
+  isPublicPublished: z.boolean().default(false),
+  listingMode: z.enum(['BUY', 'RENT', 'LEASE']).default('BUY'),
+}).refine((u) => u.carpetAreaSqft <= u.saleableAreaSqft, {
+  message: 'Usable / carpet area cannot exceed primary / saleable area',
+  path: ['carpetAreaSqft'],
+});
+
 export const unitStatusTransitionSchema = z.object({
   orgId: z.string().min(1),
   unitId: z.string().min(1),
@@ -626,7 +661,7 @@ export const createQuotationSchema = z.object({
   discount: z.object({
     type: z.enum(['NONE', 'FIXED_INR', 'PER_SQFT', 'PERCENTAGE_OF_BASE']).default('NONE'),
     value: z.coerce.number().nonnegative().default(0),
-    reason: z.string().max(250).optional(),
+    reason: z.string().max(250).nullish(),
   }),
   validDays: z.coerce.number().int().min(1).max(90).default(15),
   termsAndConditions: z.string().min(10).max(4000),

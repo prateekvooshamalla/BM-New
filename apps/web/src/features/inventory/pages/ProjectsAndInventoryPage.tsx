@@ -195,14 +195,19 @@ export function ProjectsAndInventoryPage() {
 
   // Bulk Generator Form
   const [bulkTowerId, setBulkTowerId] = React.useState('');
+  const [bulkUnitType, setBulkUnitType] = React.useState<'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE'>('APARTMENT');
   const [bulkStartFloor, setBulkStartFloor] = React.useState('1');
   const [bulkEndFloor, setBulkEndFloor] = React.useState('10');
   const [bulkUnitsPerFloor, setBulkUnitsPerFloor] = React.useState('4');
   const [bulkBhk, setBulkBhk] = React.useState('3 BHK');
+  const [bulkFacing, setBulkFacing] = React.useState<FacingDirection>('EAST');
   const [bulkSaleable, setBulkSaleable] = React.useState('1850');
   const [bulkCarpet, setBulkCarpet] = React.useState('1295');
-  const [bulkFloorPlan, setBulkFloorPlan] = React.useState<File | null>(null);
   const [bulkRate, setBulkRate] = React.useState('8800');
+  const [bulkParkingEntitled, setBulkParkingEntitled] = React.useState('2');
+  const [bulkCorner, setBulkCorner] = React.useState(false);
+  const [bulkPublished, setBulkPublished] = React.useState(false);
+  const [bulkFloorPlan, setBulkFloorPlan] = React.useState<File | null>(null);
   const [bulkStartUnit, setBulkStartUnit] = React.useState('1');
   React.useEffect(() => {
     const existing = units.filter((unit) => unit.towerId === bulkTowerId && unit.floorNumber >= Number(bulkStartFloor) && unit.floorNumber <= Number(bulkEndFloor));
@@ -499,6 +504,7 @@ export function ProjectsAndInventoryPage() {
           towerId: tObj.id,
           towerCode: tObj.code,
           towerName: tObj.name,
+          unitType: bulkUnitType,
           startFloor: Number(bulkStartFloor),
           endFloor: Number(bulkEndFloor),
           unitsPerFloor: Number(bulkUnitsPerFloor),
@@ -507,9 +513,12 @@ export function ProjectsAndInventoryPage() {
           bhk: bulkBhk,
           saleableAreaSqft: Number(bulkSaleable),
           carpetAreaSqft: Number(bulkCarpet),
-          facing: 'EAST',
+          facing: bulkFacing,
           baseRatePerSqft: Number(bulkRate),
-          parkingEntitlementCount: 2,
+          parkingEntitlementCount: Number(bulkParkingEntitled),
+          isCorner: bulkCorner,
+          isPublicPublished: bulkPublished,
+          listingMode: 'BUY',
         }
       );
       setBulkWizardOpen(false);
@@ -1381,25 +1390,42 @@ export function ProjectsAndInventoryPage() {
 
       {/* Bulk Generate Units Wizard */}
       <Dialog open={bulkWizardOpen} onOpenChange={setBulkWizardOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bulk Generate Tower Inventory</DialogTitle>
             <DialogDescription>
-              Generate standardized apartments across a range of floors in a single atomic batch.
+              Generate standardized inventory across a range of floors in a single atomic batch with identical attributes to single unit uploads.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleBulkGenerate} className="space-y-3">
-            <div className="space-y-1">
-              <Label>Target Tower *</Label>
-              <Select value={bulkTowerId} onValueChange={setBulkTowerId}>
-                <SelectTrigger><SelectValue placeholder="Choose tower" /></SelectTrigger>
-                <SelectContent>
-                  {towers.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>{t.name} ({t.code})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Target Tower / Sector *</Label>
+                <Select value={bulkTowerId} onValueChange={setBulkTowerId}>
+                  <SelectTrigger><SelectValue placeholder="Choose tower" /></SelectTrigger>
+                  <SelectContent>
+                    {towers.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>{t.name} ({t.code})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Unit Type *</Label>
+                <Select value={bulkUnitType} onValueChange={(v: any) => setBulkUnitType(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="APARTMENT">Apartment</SelectItem>
+                    <SelectItem value="PENTHOUSE">Penthouse</SelectItem>
+                    <SelectItem value="VILLA">Villa</SelectItem>
+                    <SelectItem value="PLOT">Plot</SelectItem>
+                    <SelectItem value="SHOP">Retail Shop</SelectItem>
+                    <SelectItem value="OFFICE">Office Suite</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
+
             <div className="grid grid-cols-3 gap-2">
               <div className="space-y-1">
                 <Label>Start Floor</Label>
@@ -1412,30 +1438,69 @@ export function ProjectsAndInventoryPage() {
               <div className="space-y-1">
                 <Label>Units / Floor</Label>
                 <Input type="number" min={1} max={16} value={bulkUnitsPerFloor} onChange={(e) => setBulkUnitsPerFloor(e.target.value)} />
-                <Label>Starting flat number per floor</Label>
-                <Input type="number" min={1} max={99} value={bulkStartUnit} onChange={(e) => setBulkStartUnit(e.target.value)} />
-                <p className="text-xs text-muted-foreground">Use 3 to add flats 03 onwards when 01–02 already exist.</p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+
+            <div className="space-y-1">
+              <Label>Starting flat number per floor</Label>
+              <Input type="number" min={1} max={99} value={bulkStartUnit} onChange={(e) => setBulkStartUnit(e.target.value)} />
+              <p className="text-xs text-muted-foreground">Use 3 to add flats 03 onwards when 01–02 already exist.</p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <Label>BHK</Label>
-                <Input value={bulkBhk} onChange={(e) => setBulkBhk(e.target.value)} />
+                <Label>Configuration / BHK *</Label>
+                <Input required value={bulkBhk} onChange={(e) => setBulkBhk(e.target.value)} placeholder="3 BHK / 2400 Sqft Plot" />
               </div>
               <div className="space-y-1">
-                <Label>Base Rate / sq.ft.</Label>
-                <Input type="number" value={bulkRate} onChange={(e) => setBulkRate(e.target.value)} />
+                <Label>Facing *</Label>
+                <Select value={bulkFacing} onValueChange={(v: any) => setBulkFacing(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FACING_OPTIONS.map((f) => (
+                      <SelectItem key={f} value={f}>{f}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
-                <Label>Saleable Area (sq.ft.)</Label>
-                <Input type="number" value={bulkSaleable} onChange={(e) => setBulkSaleable(e.target.value)} />
+                <Label>Saleable Area (sq. ft.) *</Label>
+                <Input required type="number" value={bulkSaleable} onChange={(e) => setBulkSaleable(e.target.value)} />
               </div>
               <div className="space-y-1">
-                <Label>Carpet Area (sq.ft.)</Label>
-                <Input type="number" value={bulkCarpet} onChange={(e) => setBulkCarpet(e.target.value)} />
+                <Label>Carpet Area (sq. ft.) *</Label>
+                <Input required type="number" value={bulkCarpet} onChange={(e) => setBulkCarpet(e.target.value)} />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label>Base Rate per sq. ft. (INR) *</Label>
+                <Input required type="number" value={bulkRate} onChange={(e) => setBulkRate(e.target.value)} />
+                <p className="text-xs text-muted-foreground font-medium text-primary">
+                  Establishes the Version 1 baseline pricing for this flat size ({bulkBhk}, {bulkSaleable} sq.ft.).
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label>Parking Entitlement (Spaces)</Label>
+                <Input type="number" min={0} max={10} value={bulkParkingEntitled} onChange={(e) => setBulkParkingEntitled(e.target.value)} />
               </div>
             </div>
-            <div className="space-y-1"><Label>Floorplan image (optional)</Label><Input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setBulkFloorPlan(e.target.files?.[0] ?? null)} /><p className="text-xs text-muted-foreground">Applied to all flats in this batch. JPG, PNG or WebP, up to 10 MB.</p></div>
+
+            <div className="flex items-center justify-between pt-1">
+              <label className="flex items-center gap-2 text-xs">
+                <Switch checked={bulkCorner} onCheckedChange={setBulkCorner} />
+                Corner Unit
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <Switch checked={bulkPublished} onCheckedChange={setBulkPublished} />
+                Publish on Public Portal
+              </label>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Floor plan image (optional)</Label>
+              <Input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setBulkFloorPlan(e.target.files?.[0] ?? null)} />
+              <p className="text-xs text-muted-foreground">Applied to all flats in this batch. JPG, PNG or WebP, up to 10 MB.</p>
+            </div>
+
             <DialogFooter>
               <Button type="submit" disabled={busy || !bulkTowerId}>
                 {busy ? 'Generating...' : 'Generate Inventory'}

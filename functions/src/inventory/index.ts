@@ -348,9 +348,12 @@ const bulkGenerateUnitsSchema = z.object({
     'NORTH_WEST',
     'SOUTH_EAST',
     'SOUTH_WEST',
-  ]),
+  ]).default('EAST'),
   baseRatePerSqft: z.coerce.number().nonnegative(),
   parkingEntitlementCount: z.coerce.number().int().min(0).max(20).default(1),
+  isCorner: z.boolean().optional(),
+  isPublicPublished: z.boolean().default(false),
+  listingMode: z.enum(['BUY', 'RENT', 'LEASE']).default('BUY'),
 });
 
 export async function bulkGenerateTowerUnitsService(db: Firestore, actor: AuthenticatedActor, actorRole: string, rawInput: unknown) {
@@ -391,13 +394,16 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
             saleableAreaSqft: input.saleableAreaSqft,
             carpetAreaSqft: input.carpetAreaSqft,
             facing: input.facing,
-            isCorner: idx === input.startUnitNumber || idx === input.startUnitNumber + input.unitsPerFloor - 1,
+            isCorner:
+              input.isCorner !== undefined
+                ? input.isCorner
+                : idx === input.startUnitNumber || idx === input.startUnitNumber + input.unitsPerFloor - 1,
             balconiesCount: input.unitType === 'PLOT' ? 0 : 2,
             parkingEntitlementCount: input.parkingEntitlementCount,
             baseRatePerSqft: input.baseRatePerSqft,
             floorPlanStoragePath: input.floorPlanStoragePath,
-            listingMode: 'BUY',
-            isPublicPublished: false,
+            listingMode: input.listingMode ?? 'BUY',
+            isPublicPublished: Boolean(input.isPublicPublished),
           }
         );
         created++;

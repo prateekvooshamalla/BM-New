@@ -5,6 +5,7 @@ import { decideApprovalSchema } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import { parseCallableInput } from '../shared/validation';
 
 export async function createApprovalRequestService(
   db: Firestore,
@@ -59,7 +60,7 @@ export async function decideApprovalService(
   actorRole: string,
   rawInput: unknown
 ): Promise<ApprovalRequest> {
-  const input = decideApprovalSchema.parse(rawInput);
+  const input = parseCallableInput(decideApprovalSchema, rawInput);
   const nowIso = new Date().toISOString();
 
   return db.runTransaction(async (tx) => {
@@ -74,6 +75,22 @@ export async function decideApprovalService(
       throw new HttpsError('failed-precondition', `Approval is already ${current.status}.`);
     }
 
+    const priceBookRef =
+      current.entityType === 'PRICE_BOOK'
+        ? db.collection('price_books').doc(current.entityId)
+        : null;
+    const priceBookSnap = priceBookRef ? await tx.get(priceBookRef) : null;
+    const quotationRef =
+      current.entityType === 'QUOTATION_DISCOUNT'
+        ? db.collection('quotations').doc(current.entityId)
+        : null;
+    const quotationSnap = quotationRef ? await tx.get(quotationRef) : null;
+    const bookingRef =
+      current.entityType === 'BOOKING'
+        ? db.collection('bookings').doc(current.entityId)
+        : null;
+    const bookingSnap = bookingRef ? await tx.get(bookingRef) : null;
+
     const updated: ApprovalRequest = {
       ...current,
       status: input.decision,
@@ -83,41 +100,28 @@ export async function decideApprovalService(
     };
     tx.set(appRef, updated);
 
-    // Apply downstream state update atomically for entity types
-    if (current.entityType === 'PRICE_BOOK') {
-      const pbRef = db.collection('price_books').doc(current.entityId);
-      const pbSnap = await tx.get(pbRef);
-      if (pbSnap.exists) {
-        tx.update(pbRef, {
-          status: input.decision === 'APPROVED' ? 'APPROVED' : 'REJECTED',
-          isImmutable: input.decision === 'APPROVED',
-          approvedByUid: input.decision === 'APPROVED' ? actor.uid : null,
-          approvedAt: input.decision === 'APPROVED' ? nowIso : null,
-          updatedAt: nowIso,
-        });
-      }
-    } else if (current.entityType === 'QUOTATION_DISCOUNT') {
-      const qtRef = db.collection('quotations').doc(current.entityId);
-      const qtSnap = await tx.get(qtRef);
-      if (qtSnap.exists) {
-        tx.update(qtRef, {
-          status: input.decision === 'APPROVED' ? 'ISSUED' : 'DRAFT',
-          approvedByUid: input.decision === 'APPROVED' ? actor.uid : null,
-          approvedAt: input.decision === 'APPROVED' ? nowIso : null,
-          updatedAt: nowIso,
-        });
-      }
-    } else if (current.entityType === 'BOOKING') {
-      const bkRef = db.collection('bookings').doc(current.entityId);
-      const bkSnap = await tx.get(bkRef);
-      if (bkSnap.exists) {
-        tx.update(bkRef, {
-          status: input.decision === 'APPROVED' ? 'BOOKED' : 'CANCELLED',
-          approvedByUid: input.decision === 'APPROVED' ? actor.uid : null,
-          bookedAt: input.decision === 'APPROVED' ? nowIso : null,
-          updatedAt: nowIso,
-        });
-      }
+    if (priceBookRef && priceBookSnap?.exists) {
+      tx.update(priceBookRef, {
+        status: input.decision === 'APPROVED' ? 'APPROVED' : 'REJECTED',
+        isImmutable: input.decision === 'APPROVED',
+        approvedByUid: input.decision === 'APPROVED' ? actor.uid : null,
+        approvedAt: input.decision === 'APPROVED' ? nowIso : null,
+        updatedAt: nowIso,
+      });
+    } else if (quotationRef && quotationSnap?.exists) {
+      tx.update(quotationRef, {
+        status: input.decision === 'APPROVED' ? 'ISSUED' : 'DRAFT',
+        approvedByUid: input.decision === 'APPROVED' ? actor.uid : null,
+        approvedAt: input.decision === 'APPROVED' ? nowIso : null,
+        updatedAt: nowIso,
+      });
+    } else if (bookingRef && bookingSnap?.exists) {
+      tx.update(bookingRef, {
+        status: input.decision === 'APPROVED' ? 'BOOKED' : 'CANCELLED',
+        approvedByUid: input.decision === 'APPROVED' ? actor.uid : null,
+        bookedAt: input.decision === 'APPROVED' ? nowIso : null,
+        updatedAt: nowIso,
+      });
     }
 
     await writeAuditEvent(
@@ -141,7 +145,7 @@ export async function decideApprovalService(
 }
 
 export const decideApproval = onCall(async (request) => {
-  const parsed = decideApprovalSchema.parse(request.data);
+  const parsed = parseCallableInput(decideApprovalSchema, request.data);
   const appSnap = await adminDb.collection('approvals').doc(parsed.approvalId).get();
   if (!appSnap.exists || appSnap.data()?.orgId !== parsed.orgId) {
     throw new HttpsError('not-found', 'Approval request not found.');

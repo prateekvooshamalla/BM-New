@@ -31,7 +31,7 @@ const ACTOR = {
 
 describe('Phase 4 — Quotations, C-704 Regression (₹3,92,73,985), CLP Schedule, PDF & Floor Plans', () => {
   it('computes C-704 reference total of ₹3,92,73,985, reconciles CLP schedule, generates PDF, and preserves frozen snapshot across future price hikes', async () => {
-    const db = createTransactionalTestFirestore();
+    const db = createTransactionalTestFirestore({ enforceReadBeforeWrite: true });
     const { organization } = await createOrganizationService(db, ACTOR, {
       name: 'Signature Spaces',
       legalName: 'Signature Spaces India Pvt Ltd',
@@ -231,7 +231,7 @@ describe('Phase 4 — Quotations, C-704 Regression (₹3,92,73,985), CLP Schedul
         },
         parkingSlotsCount: 2,
         parkingTypeUsed: 'STANDARD',
-        discount: { type: 'NONE', value: 0 },
+        discount: { type: 'NONE', value: 0, reason: null },
         validDays: 15,
         termsAndConditions: 'Subject to RERA Sale Agreement terms.',
       }
@@ -239,6 +239,7 @@ describe('Phase 4 — Quotations, C-704 Regression (₹3,92,73,985), CLP Schedul
 
     // Exact regression assertion for ₹3,92,73,985
     expect(quotation.totalPayableInr).toBe(39273985);
+    expect(quotation.discount.reason).toBeUndefined();
     expect(formatInr(quotation.totalPayableInr)).toBe('₹3,92,73,985');
 
     // Verify CLP schedule reconciles 100% and exact total INR

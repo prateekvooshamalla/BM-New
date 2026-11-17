@@ -4,8 +4,10 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { z } from 'zod';
 import {
   calculateCostSheet,
+  computeSftRateBreakup,
   formatArea,
   formatCurrency,
+  formatLineItemCalculation,
   type CostSheetTemplate,
   type Organization,
   type ParkingSlot,
@@ -26,6 +28,7 @@ import {
 } from '../shared/auth-guard';
 import { createApprovalRequestService } from '../approvals';
 import { writeAuditEvent } from '../audit';
+import { parseCallableInput } from '../shared/validation';
 
 function pdfCurrencyPrefix(currencyCode?: string): string {
   switch ((currencyCode ?? 'INR').toUpperCase()) {
@@ -192,48 +195,157 @@ export async function generateQuotationPdfBytes(params: {
       `Layout Ref: ${unit.floorPlanVersionId ?? 'Approved Layout'} | Parking: ${quotation.parkingSlotsCount} (${quotation.parkingTypeUsed}) | Price Book v${quotation.priceBookVersion}`,
       { x: 36, y, size: 8, font: fontRegular, color: rgb(0.35, 0.4, 0.45) }
     );
-    y -= 22;
+    y -= 20;
   }
+
+  const sftBreakup = computeSftRateBreakup(
+    quotation.breakdown,
+    unit.saleableAreaSqft,
+    unit.carpetAreaSqft
+  );
+
+  // Pricing Option & SFT Rate Summary Card
+  ensureSpace(56);
+  page.drawRectangle({
+    x: 36,
+    y: y - 44,
+    width: 523,
+    height: 48,
+    color: rgb(0.96, 0.97, 0.99),
+    borderColor: rgb(0.82, 0.86, 0.93),
+    borderWidth: 0.75,
+  });
+
+  page.drawText('PRICING OPTION & SFT RATE BREAKUP SUMMARY', {
+    x: 44,
+    y: y - 12,
+    size: 8.5,
+    font: fontBold,
+    color: rgb(0.06, 0.15, 0.36),
+  });
+
+  page.drawText(
+    `Option: Price Book v${quotation.priceBookVersion} | Sft Basis: ${formatArea(unit.saleableAreaSqft, areaUnit)} Primary (${formatArea(unit.carpetAreaSqft, areaUnit)} Usable)`,
+    {
+      x: 44,
+      y: y - 23,
+      size: 7.5,
+      font: fontRegular,
+      color: rgb(0.35, 0.4, 0.45),
+    }
+  );
+
+  const metricY = y - 36;
+  page.drawText(`Base SFT: ${fmtMoney(sftBreakup.baseRatePerSqft)}/${areaUnit.toLowerCase()}`, {
+    x: 44,
+    y: metricY,
+    size: 7.5,
+    font: fontBold,
+    color: rgb(0.1, 0.15, 0.25),
+  });
+
+  page.drawText(`Floor & Facing: +${fmtMoney(sftBreakup.floorRiseRatePerSqft + sftBreakup.premiumsRatePerSqft)}/${areaUnit.toLowerCase()}`, {
+    x: 175,
+    y: metricY,
+    size: 7.5,
+    font: fontRegular,
+    color: rgb(0.2, 0.25, 0.35),
+  });
+
+  page.drawText(`Agreement SFT: ${fmtMoney(sftBreakup.agreementRatePerSqft)}/${areaUnit.toLowerCase()}`, {
+    x: 310,
+    y: metricY,
+    size: 7.5,
+    font: fontBold,
+    color: rgb(0.06, 0.15, 0.36),
+  });
+
+  page.drawText(`All-Inclusive SFT: ${fmtMoney(sftBreakup.netAllInclusiveRatePerSqft)}/${areaUnit.toLowerCase()}`, {
+    x: 435,
+    y: metricY,
+    size: 7.5,
+    font: fontBold,
+    color: rgb(0.06, 0.15, 0.36),
+  });
+
+  y -= 54;
 
   // Cost Breakdown Table Header
   const tableTitle = template?.customLabels.pricingTableTitle || 'COST COMPONENT';
   page.drawRectangle({ x: 36, y: y - 4, width: 523, height: 18, color: rgb(0.94, 0.95, 0.97) });
-  page.drawText(tableTitle.toUpperCase().slice(0, 38), { x: 42, y: y + 1, size: 8, font: fontBold });
-  page.drawText('BASE AMOUNT', { x: 300, y: y + 1, size: 8, font: fontBold });
-  page.drawText(taxHeaderLabel.slice(0, 14), { x: 400, y: y + 1, size: 8, font: fontBold });
-  page.drawText('TOTAL', { x: 480, y: y + 1, size: 8, font: fontBold });
+  page.drawText(tableTitle.toUpperCase().slice(0, 22), { x: 42, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('RATE / BASIS', { x: 175, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('CALCULATION BREAKUP', { x: 250, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('BASE AMOUNT', { x: 385, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText(taxHeaderLabel.slice(0, 8), { x: 450, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('TOTAL', { x: 505, y: y + 1, size: 7.5, font: fontBold });
   y -= 18;
 
   for (const li of quotation.breakdown.lineItems) {
+    const { rateLabel, calculationText } = formatLineItemCalculation(
+      li,
+      unit.saleableAreaSqft,
+      unit.carpetAreaSqft,
+      currencyCode,
+      prefix
+    );
+
     ensureSpace(16);
-    page.drawText(li.displayLabel.slice(0, 48), { x: 42, y, size: 8.2, font: fontRegular });
-    page.drawText(fmtMoney(li.baseAmountInr), { x: 300, y, size: 8.2, font: fontRegular });
+    page.drawText(li.displayLabel.slice(0, 26), { x: 42, y, size: 7.5, font: fontRegular });
+    page.drawText(rateLabel.slice(0, 16), { x: 175, y, size: 7.2, font: fontRegular, color: rgb(0.25, 0.3, 0.35) });
+    page.drawText(calculationText.slice(0, 30), { x: 250, y, size: 7.2, font: fontRegular, color: rgb(0.25, 0.3, 0.35) });
+    page.drawText(fmtMoney(li.baseAmountInr), { x: 385, y, size: 7.5, font: fontRegular });
     page.drawText(
       toggles.showTaxBreakdown ? `${fmtMoney(li.gstAmountInr)} (${li.gstPct}%)` : '-',
       {
-        x: 400,
+        x: 450,
         y,
-        size: 7.8,
+        size: 7.2,
         font: fontRegular,
       }
     );
-    page.drawText(fmtMoney(li.totalWithGstInr), { x: 480, y, size: 8.2, font: fontBold });
+    page.drawText(fmtMoney(li.totalWithGstInr), { x: 505, y, size: 7.5, font: fontBold });
     y -= 14;
   }
 
   if (quotation.breakdown.discountAmountInr > 0) {
     ensureSpace(16);
-    page.drawText('Less: Approved Offer / Special Rebate', {
+    page.drawText('Less: Approved Offer / Rebate', {
       x: 42,
       y,
-      size: 8.5,
+      size: 7.8,
       font: fontBold,
       color: rgb(0.08, 0.5, 0.24),
     });
-    page.drawText(`- ${fmtMoney(quotation.breakdown.discountAmountInr)}`, {
-      x: 300,
+    page.drawText(`- ${fmtMoney(sftBreakup.discountRatePerSqft)}/${areaUnit.toLowerCase()}`, {
+      x: 175,
       y,
-      size: 8.5,
+      size: 7.5,
+      font: fontBold,
+      color: rgb(0.08, 0.5, 0.24),
+    });
+    page.drawText(
+      `${Math.round(unit.saleableAreaSqft)} sq.ft. × -${fmtMoney(sftBreakup.discountRatePerSqft)}`,
+      {
+        x: 250,
+        y,
+        size: 7.2,
+        font: fontBold,
+        color: rgb(0.08, 0.5, 0.24),
+      }
+    );
+    page.drawText(`- ${fmtMoney(quotation.breakdown.discountAmountInr)}`, {
+      x: 385,
+      y,
+      size: 7.8,
+      font: fontBold,
+      color: rgb(0.08, 0.5, 0.24),
+    });
+    page.drawText('—', { x: 450, y, size: 7.5, font: fontRegular });
+    page.drawText(`- ${fmtMoney(quotation.breakdown.discountAmountInr)}`, {
+      x: 505,
+      y,
+      size: 7.8,
       font: fontBold,
       color: rgb(0.08, 0.5, 0.24),
     });
@@ -245,18 +357,25 @@ export async function generateQuotationPdfBytes(params: {
   const grandTotalTitle = (
     template?.customLabels.grandTotalLabel || 'TOTAL ALL-INCLUSIVE PAYABLE'
   ).toUpperCase();
-  page.drawRectangle({ x: 36, y: y - 10, width: 523, height: 24, color: rgb(0.93, 0.96, 1) });
-  page.drawText(grandTotalTitle.slice(0, 40), {
+  page.drawRectangle({ x: 36, y: y - 10, width: 523, height: 26, color: rgb(0.93, 0.96, 1) });
+  page.drawText(grandTotalTitle.slice(0, 26), {
     x: 42,
-    y: y - 2,
-    size: 9.5,
+    y: y - 1,
+    size: 9,
+    font: fontBold,
+    color: rgb(0.06, 0.15, 0.36),
+  });
+  page.drawText(`Net SFT: ${fmtMoney(sftBreakup.netAllInclusiveRatePerSqft)}/${areaUnit.toLowerCase()}`, {
+    x: 205,
+    y: y - 1,
+    size: 8,
     font: fontBold,
     color: rgb(0.06, 0.15, 0.36),
   });
   page.drawText(`${taxHeaderLabel.slice(0, 10)}: ${fmtMoney(quotation.breakdown.totalGstInr)}`, {
-    x: 320,
-    y: y - 2,
-    size: 8.5,
+    x: 335,
+    y: y - 1,
+    size: 8,
     font: fontRegular,
   });
   page.drawText(fmtMoney(quotation.breakdown.totalPayableInr), {
@@ -410,7 +529,7 @@ export async function createQuotationService(
   actorRole: string,
   rawInput: unknown
 ): Promise<{ quotation: Quotation; version: QuotationVersion; pdfBytes: Uint8Array }> {
-  const input = createQuotationSchema.parse(rawInput);
+  const input = parseCallableInput(createQuotationSchema, rawInput);
   const now = new Date();
   const nowIso = now.toISOString();
 
@@ -516,6 +635,11 @@ export async function createQuotationService(
 
   const currencyCode = breakdown.currencyCode ?? project.currencyCode ?? org.defaultCurrency ?? 'INR';
   const areaUnit = breakdown.areaUnit ?? unit.areaUnit ?? project.areaUnit ?? 'SQFT';
+  const discount: Quotation['discount'] = {
+    type: input.discount.type,
+    value: input.discount.value,
+    ...(input.discount.reason == null ? {} : { reason: input.discount.reason }),
+  };
 
   const qtRef = db.collection('quotations').doc();
   const quotationNumber = `BM-${project.code}-${now.getFullYear()}-${qtRef.id.slice(0, 5).toUpperCase()}`;
@@ -557,7 +681,7 @@ export async function createQuotationService(
     parkingSlotsCount:
       allocatedSlots.length > 0 ? allocatedSlots.length : input.parkingSlotsCount,
     parkingTypeUsed: input.parkingTypeUsed,
-    discount: input.discount,
+    discount,
     breakdown,
     totalPayableInr: breakdown.totalPayableInr,
     validUntil,
@@ -644,7 +768,7 @@ export const createPaymentPlan = onCall(async (request) => {
 });
 
 export const createQuotation = onCall(async (request) => {
-  const parsed = createQuotationSchema.parse(request.data);
+  const parsed = parseCallableInput(createQuotationSchema, request.data);
   let actor: AuthenticatedActor;
   let actorName = 'Sales Representative';
   let actorRole = 'SALES_EXECUTIVE';

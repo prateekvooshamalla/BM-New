@@ -26,7 +26,9 @@ function setNestedValue(obj: Record<string, any>, path: string, value: any): voi
   cur[parts[parts.length - 1]!] = value;
 }
 
-export function createTransactionalTestFirestore(): Firestore {
+export function createTransactionalTestFirestore(
+  options: { enforceReadBeforeWrite?: boolean } = {}
+): Firestore {
   const store = new Map<string, DocMap>();
 
   const getColMap = (colName: string): DocMap => {
@@ -181,21 +183,28 @@ export function createTransactionalTestFirestore(): Firestore {
       // Serialize concurrent transactions cleanly just like Firestore optimistic lock retries
       const run = async (): Promise<T> => {
         const pendingWrites: Array<() => Promise<void>> = [];
+        let hasWrites = false;
         const tx = {
           async get(refOrQuery: any) {
+            if (options.enforceReadBeforeWrite && hasWrites) {
+              throw new Error('Firestore transactions require all reads to be executed before all writes.');
+            }
             // Yield microtask so Promise.all concurrent callers interleave realistically
             await Promise.resolve();
             return refOrQuery.get();
           },
           set(ref: any, data: Record<string, any>, opts?: { merge?: boolean }) {
+            hasWrites = true;
             pendingWrites.push(() => ref.set(data, opts));
             return tx;
           },
           update(ref: any, patch: Record<string, any>) {
+            hasWrites = true;
             pendingWrites.push(() => ref.update(patch));
             return tx;
           },
           delete(ref: any) {
+            hasWrites = true;
             pendingWrites.push(() => ref.delete());
             return tx;
           },

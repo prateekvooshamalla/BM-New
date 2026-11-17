@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createQuotationSchema,
   createLeadSchema,
   sendAiMessageSchema,
   upsertPriceBookSchema,
@@ -11,6 +12,7 @@ describe('callable input validation', () => {
     expect(upsertPriceBookSchema.shape.priceBookId.parse(null)).toBeNull();
     expect(createLeadSchema.shape.campaign.parse(null)).toBeNull();
     expect(sendAiMessageSchema.shape.structuredAnswerPatch.parse(null)).toBeNull();
+    expect(createQuotationSchema.shape.discount.shape.reason.parse(null)).toBeNull();
   });
 
   it('allows AI upload authorization only for a project floor-plan path', () => {

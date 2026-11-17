@@ -787,3 +787,120 @@ function computePaymentSchedule(params: {
     };
   });
 }
+
+export interface SftRateBreakup {
+  saleableAreaSqft: number;
+  carpetAreaSqft: number;
+  baseRatePerSqft: number;
+  floorRiseRatePerSqft: number;
+  premiumsRatePerSqft: number;
+  agreementRatePerSqft: number;
+  otherChargesRatePerSqft: number;
+  gstRatePerSqft: number;
+  allInclusiveRatePerSqft: number;
+  discountRatePerSqft: number;
+  netAllInclusiveRatePerSqft: number;
+}
+
+export function computeSftRateBreakup(
+  breakdown: CostSheetBreakdown,
+  saleableAreaSqft: number,
+  carpetAreaSqft: number
+): SftRateBreakup {
+  const sft = saleableAreaSqft > 0 ? saleableAreaSqft : 1;
+  const premiumsInr =
+    (breakdown.facingPremiumInr || 0) +
+    (breakdown.cornerPremiumInr || 0) +
+    (breakdown.viewPremiumInr || 0) +
+    (breakdown.locationPremiumInr || 0) +
+    (breakdown.unitSpecificPremiumInr || 0);
+
+  const otherChargesInr =
+    (breakdown.otherServiceChargesBeforeGstInr || 0) +
+    (breakdown.exemptCorpusChargesInr || 0);
+
+  const totalBeforeDiscount = breakdown.totalPayableInr + (breakdown.discountAmountInr || 0);
+
+  return {
+    saleableAreaSqft,
+    carpetAreaSqft,
+    baseRatePerSqft: breakdown.baseRatePerSqft,
+    floorRiseRatePerSqft: Math.round((breakdown.floorRiseInr || 0) / sft),
+    premiumsRatePerSqft: Math.round(premiumsInr / sft),
+    agreementRatePerSqft: Math.round((breakdown.grossAgreementComponentsInr || 0) / sft),
+    otherChargesRatePerSqft: Math.round(otherChargesInr / sft),
+    gstRatePerSqft: Math.round((breakdown.totalGstInr || 0) / sft),
+    allInclusiveRatePerSqft: Math.round(totalBeforeDiscount / sft),
+    discountRatePerSqft: Math.round((breakdown.discountAmountInr || 0) / sft),
+    netAllInclusiveRatePerSqft: Math.round(breakdown.totalPayableInr / sft),
+  };
+}
+
+export function formatLineItemCalculation(
+  item: ComputedLineItem,
+  saleableAreaSqft: number,
+  carpetAreaSqft: number,
+  currencyCode = 'INR',
+  currencySymbolOverride?: string
+): { rateLabel: string; calculationText: string } {
+  const sym = currencySymbolOverride ?? getCurrencyConfig(currencyCode).symbol;
+  const fmt = (n: number) => `${sym}${Math.round(n).toLocaleString('en-IN')}`;
+  const areaFmt = (n: number) => Math.round(n).toLocaleString('en-IN');
+
+  switch (item.internalKey) {
+    case 'base_price':
+      return {
+        rateLabel: `${fmt(item.rateOrInput)}/sq.ft.`,
+        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × ${fmt(item.rateOrInput)}/sq.ft.`,
+      };
+    case 'floor_rise':
+      return {
+        rateLabel: `+${fmt(item.rateOrInput)}/sq.ft.`,
+        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × +${fmt(item.rateOrInput)}/sq.ft.`,
+      };
+    case 'facing_premium':
+    case 'view_premium':
+    case 'corner_premium':
+    case 'location_premium':
+      return {
+        rateLabel: `+${fmt(item.rateOrInput)}/sq.ft.`,
+        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × +${fmt(item.rateOrInput)}/sq.ft.`,
+      };
+    case 'parking_charges':
+      return {
+        rateLabel: item.baseAmountInr > 0 ? 'Allotted Bays' : 'Included',
+        calculationText:
+          item.baseAmountInr > 0 ? 'Dedicated reserved bay(s)' : 'Included in entitlement',
+      };
+    default:
+      if (item.basis === 'PER_SQFT_SALEABLE' || item.basis === 'PER_PRIMARY_AREA') {
+        return {
+          rateLabel: `${fmt(item.rateOrInput)}/sq.ft.`,
+          calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × ${fmt(item.rateOrInput)}/sq.ft.`,
+        };
+      }
+      if (item.basis === 'PER_SQFT_CARPET' || item.basis === 'PER_SECONDARY_AREA') {
+        return {
+          rateLabel: `${fmt(item.rateOrInput)}/sq.ft. (carpet)`,
+          calculationText: `${areaFmt(carpetAreaSqft)} sq.ft. carpet × ${fmt(item.rateOrInput)}/sq.ft.`,
+        };
+      }
+      if (item.basis === 'PERCENTAGE_OF_BASE') {
+        return {
+          rateLabel: `${item.rateOrInput}% of Base`,
+          calculationText: `${item.rateOrInput}% on Base Consideration`,
+        };
+      }
+      if (item.basis === 'FIXED_AMOUNT') {
+        return {
+          rateLabel: 'Fixed Lump-sum',
+          calculationText: 'Standard fixed charge',
+        };
+      }
+      return {
+        rateLabel: item.rateOrInput ? `${fmt(item.rateOrInput)}` : 'Fixed',
+        calculationText: 'Standard rate calculation',
+      };
+  }
+}
+

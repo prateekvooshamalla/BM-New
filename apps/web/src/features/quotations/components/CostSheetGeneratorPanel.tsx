@@ -12,8 +12,10 @@ import {
 } from 'lucide-react';
 import {
   calculateCostSheet,
+  computeSftRateBreakup,
   formatAreaSqft,
   formatInr,
+  formatLineItemCalculation,
   validatePaymentPlanPercentages,
   type ApprovalRequest,
   type ParkingSlot,
@@ -224,6 +226,15 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
     discountType,
     discountValue,
   ]);
+
+  const liveSftBreakup = React.useMemo(() => {
+    if (!liveBreakdown || !selectedUnit) return null;
+    return computeSftRateBreakup(
+      liveBreakdown,
+      selectedUnit.saleableAreaSqft,
+      selectedUnit.carpetAreaSqft
+    );
+  }, [liveBreakdown, selectedUnit]);
 
   const milestoneValidation = validatePaymentPlanPercentages(milestones);
 
@@ -658,32 +669,99 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                 </div>
               )}
 
-              {liveBreakdown ? (
+              {liveBreakdown && liveSftBreakup && selectedUnit ? (
                 <>
+                  {/* Pricing Option & Per-SFT Breakup Card */}
+                  <div className="rounded-lg border border-border bg-card p-3.5 space-y-2.5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-primary">
+                          Pricing Option & SFT Rate Breakup
+                        </span>
+                        {selectedPb && (
+                          <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-primary/10 text-primary">
+                            {selectedPb.name} (v{selectedPb.versionNumber})
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground font-mono">
+                        {formatAreaSqft(selectedUnit.saleableAreaSqft)} Saleable | {formatAreaSqft(selectedUnit.carpetAreaSqft)} Carpet
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-border">
+                      <div className="p-2 rounded bg-muted/40">
+                        <div className="text-[11px] text-muted-foreground">Base Rate</div>
+                        <div className="text-sm font-bold text-foreground">
+                          ₹{liveSftBreakup.baseRatePerSqft.toLocaleString('en-IN')}<span className="text-[10px] font-normal text-muted-foreground">/sq.ft.</span>
+                        </div>
+                      </div>
+
+                      <div className="p-2 rounded bg-muted/40">
+                        <div className="text-[11px] text-muted-foreground">Floor & Facing / PLC</div>
+                        <div className="text-sm font-bold text-foreground">
+                          +₹{(liveSftBreakup.floorRiseRatePerSqft + liveSftBreakup.premiumsRatePerSqft).toLocaleString('en-IN')}<span className="text-[10px] font-normal text-muted-foreground">/sq.ft.</span>
+                        </div>
+                      </div>
+
+                      <div className="p-2 rounded bg-muted/40">
+                        <div className="text-[11px] text-muted-foreground">Agreement Rate</div>
+                        <div className="text-sm font-bold text-primary">
+                          ₹{liveSftBreakup.agreementRatePerSqft.toLocaleString('en-IN')}<span className="text-[10px] font-normal text-muted-foreground">/sq.ft.</span>
+                        </div>
+                      </div>
+
+                      <div className="p-2 rounded bg-primary/10 border border-primary/20">
+                        <div className="text-[11px] text-primary font-medium">Net All-Inclusive</div>
+                        <div className="text-sm font-bold text-primary">
+                          ₹{liveSftBreakup.netAllInclusiveRatePerSqft.toLocaleString('en-IN')}<span className="text-[10px] font-normal text-primary/80">/sq.ft.</span>
+                        </div>
+                        {liveSftBreakup.discountRatePerSqft > 0 && (
+                          <div className="text-[10px] text-emerald-600 font-medium">
+                            Rebate -₹{liveSftBreakup.discountRatePerSqft.toLocaleString('en-IN')}/sq.ft.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="rounded-md border border-border overflow-hidden">
                     <table className="bm-table w-full text-xs">
                       <thead>
                         <tr>
                           <th>Component</th>
+                          <th>Rate / Basis</th>
+                          <th>Calculation Breakup</th>
                           <th>Base (INR)</th>
                           <th>GST</th>
                           <th>Total</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {liveBreakdown.lineItems.map((li) => (
-                          <tr key={li.internalKey}>
-                            <td className="font-medium">{li.displayLabel}</td>
-                            <td>{formatInr(li.baseAmountInr)}</td>
-                            <td>
-                              {formatInr(li.gstAmountInr)} ({li.gstPct}%)
-                            </td>
-                            <td className="font-semibold">{formatInr(li.totalWithGstInr)}</td>
-                          </tr>
-                        ))}
+                        {liveBreakdown.lineItems.map((li) => {
+                          const { rateLabel, calculationText } = formatLineItemCalculation(
+                            li,
+                            selectedUnit.saleableAreaSqft,
+                            selectedUnit.carpetAreaSqft
+                          );
+                          return (
+                            <tr key={li.internalKey}>
+                              <td className="font-medium">{li.displayLabel}</td>
+                              <td className="font-mono text-muted-foreground">{rateLabel}</td>
+                              <td className="font-mono text-muted-foreground text-[11px]">{calculationText}</td>
+                              <td>{formatInr(li.baseAmountInr)}</td>
+                              <td>
+                                {formatInr(li.gstAmountInr)} ({li.gstPct}%)
+                              </td>
+                              <td className="font-semibold">{formatInr(li.totalWithGstInr)}</td>
+                            </tr>
+                          );
+                        })}
                         {liveBreakdown.discountAmountInr > 0 && (
-                          <tr className="text-emerald-700 font-semibold">
+                          <tr className="text-emerald-700 font-semibold bg-emerald-50/40 dark:bg-emerald-950/20">
                             <td>Less: Negotiated Discount ({liveBreakdown.discountEffectivePct}%)</td>
+                            <td className="font-mono">-₹{liveSftBreakup?.discountRatePerSqft.toLocaleString('en-IN')}/sq.ft.</td>
+                            <td className="font-mono text-[11px]">{selectedUnit.saleableAreaSqft.toLocaleString('en-IN')} sq.ft. × -₹{liveSftBreakup?.discountRatePerSqft.toLocaleString('en-IN')}</td>
                             <td>- {formatInr(liveBreakdown.discountAmountInr)}</td>
                             <td>—</td>
                             <td>
