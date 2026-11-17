@@ -227,7 +227,7 @@ export function ProjectsAndInventoryPage() {
   const [bulkTowerId, setBulkTowerId] = React.useState('');
   const [bulkUnitType, setBulkUnitType] = React.useState<'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE'>('APARTMENT');
   const [bulkStartFloor, setBulkStartFloor] = React.useState('1');
-  const [bulkEndFloor, setBulkEndFloor] = React.useState('10');
+  const [bulkEndFloor, setBulkEndFloor] = React.useState('5');
   const [bulkUnitsPerFloor, setBulkUnitsPerFloor] = React.useState('4');
   const [bulkBhk, setBulkBhk] = React.useState('3 BHK');
   const [bulkFacing, setBulkFacing] = React.useState<FacingDirection>('EAST');
@@ -481,6 +481,17 @@ export function ProjectsAndInventoryPage() {
         await uploadBytes(ref(storage, uploadedPath), floorPlan, { contentType: floorPlan.type });
       }
       const selectedTowerObj = towers.find((t) => t.id === unitTowerId);
+      if (
+        unitTypeVal !== 'PLOT' &&
+        unitTypeVal !== 'VILLA' &&
+        selectedTowerObj?.totalFloors &&
+        selectedTowerObj.totalFloors > 0 &&
+        Number(unitFloorNo) > selectedTowerObj.totalFloors
+      ) {
+        setBannerMsg(`Floor number (${unitFloorNo}) cannot exceed tower "${selectedTowerObj.name}" total floors (${selectedTowerObj.totalFloors}).`);
+        setBusy(false);
+        return;
+      }
       const createdUnit = await callBackendFunction<any, Unit>('createUnit', {
         orgId: activeOrgId,
         projectId: currentProjectId,
@@ -535,6 +546,18 @@ export function ProjectsAndInventoryPage() {
   const handleUpdateUnit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId || !editUnitId) return;
+    const currentUnit = units.find((u) => u.id === editUnitId);
+    const currentTower = towers.find((t) => t.id === currentUnit?.towerId);
+    if (
+      editUnitTypeVal !== 'PLOT' &&
+      editUnitTypeVal !== 'VILLA' &&
+      currentTower?.totalFloors &&
+      currentTower.totalFloors > 0 &&
+      Number(editFloorNo) > currentTower.totalFloors
+    ) {
+      setBannerMsg(`Floor number (${editFloorNo}) cannot exceed tower "${currentTower.name}" total floors (${currentTower.totalFloors}).`);
+      return;
+    }
     setBusy(true);
     try {
       const updated = await callBackendFunction<any, Unit>('updateUnit', {
@@ -604,6 +627,10 @@ export function ProjectsAndInventoryPage() {
     if (!activeOrgId || !currentProjectId || !bulkTowerId) return;
     const tObj = towers.find((t) => t.id === bulkTowerId);
     if (!tObj) return;
+    if (tObj.totalFloors && tObj.totalFloors > 0 && Number(bulkEndFloor) > tObj.totalFloors) {
+      setBannerMsg(`End floor (${bulkEndFloor}) cannot exceed tower "${tObj.name}" total floors (${tObj.totalFloors}).`);
+      return;
+    }
     setBusy(true);
     try {
       let floorPlanStoragePath: string | undefined;
@@ -1629,7 +1656,18 @@ export function ProjectsAndInventoryPage() {
               {unitTypeVal !== 'PLOT' && unitTypeVal !== 'VILLA' && (
                 <div className="space-y-1">
                   <Label>Floor Number *</Label>
-                  <Input type="number" min={0} value={unitFloorNo} onChange={(e) => setUnitFloorNo(e.target.value)} />
+                  <Input
+                    type="number"
+                    min={0}
+                    max={towers.find((t) => t.id === unitTowerId)?.totalFloors || 200}
+                    value={unitFloorNo}
+                    onChange={(e) => setUnitFloorNo(e.target.value)}
+                  />
+                  {towers.find((t) => t.id === unitTowerId)?.totalFloors ? (
+                    <p className="text-[10px] text-muted-foreground">
+                      Max floor: {towers.find((t) => t.id === unitTowerId)?.totalFloors}
+                    </p>
+                  ) : null}
                 </div>
               )}
               <div className="space-y-1">
@@ -1695,11 +1733,23 @@ export function ProjectsAndInventoryPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label>Target Tower / Sector *</Label>
-                <Select value={bulkTowerId} onValueChange={setBulkTowerId}>
+                <Select
+                  value={bulkTowerId}
+                  onValueChange={(tid) => {
+                    setBulkTowerId(tid);
+                    const chosen = towers.find((t) => t.id === tid);
+                    if (chosen?.totalFloors && chosen.totalFloors > 0) {
+                      setBulkStartFloor('1');
+                      setBulkEndFloor(String(chosen.totalFloors));
+                    }
+                  }}
+                >
                   <SelectTrigger><SelectValue placeholder="Choose tower" /></SelectTrigger>
                   <SelectContent>
                     {towers.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>{t.name} ({t.code})</SelectItem>
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name} ({t.code}) — {t.totalFloors} {t.totalFloors === 1 ? 'Floor' : 'Floors'}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1723,11 +1773,28 @@ export function ProjectsAndInventoryPage() {
             <div className="grid grid-cols-3 gap-2">
               <div className="space-y-1">
                 <Label>Start Floor</Label>
-                <Input type="number" min={1} value={bulkStartFloor} onChange={(e) => setBulkStartFloor(e.target.value)} />
+                <Input
+                  type="number"
+                  min={1}
+                  max={Number(bulkEndFloor) || 200}
+                  value={bulkStartFloor}
+                  onChange={(e) => setBulkStartFloor(e.target.value)}
+                />
               </div>
               <div className="space-y-1">
                 <Label>End Floor</Label>
-                <Input type="number" min={1} value={bulkEndFloor} onChange={(e) => setBulkEndFloor(e.target.value)} />
+                <Input
+                  type="number"
+                  min={Number(bulkStartFloor) || 1}
+                  max={towers.find((t) => t.id === bulkTowerId)?.totalFloors || 200}
+                  value={bulkEndFloor}
+                  onChange={(e) => setBulkEndFloor(e.target.value)}
+                />
+                {towers.find((t) => t.id === bulkTowerId)?.totalFloors ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Max: {towers.find((t) => t.id === bulkTowerId)?.totalFloors} floors
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1">
                 <Label>Units / Floor</Label>
@@ -1837,9 +1904,15 @@ export function ProjectsAndInventoryPage() {
                 <Input
                   type="number"
                   min={0}
+                  max={towers.find((t) => t.id === units.find((u) => u.id === editUnitId)?.towerId)?.totalFloors || 200}
                   value={editFloorNo}
                   onChange={(e) => setEditFloorNo(e.target.value)}
                 />
+                {towers.find((t) => t.id === units.find((u) => u.id === editUnitId)?.towerId)?.totalFloors ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Max floor: {towers.find((t) => t.id === units.find((u) => u.id === editUnitId)?.towerId)?.totalFloors}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1">
                 <Label>Unit Type *</Label>

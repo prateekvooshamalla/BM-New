@@ -337,4 +337,107 @@ describe('Flat Series Number, Edit Options & Customer Conversion Workflow', () =
     const conversionAct = activities.find((a) => a.title.includes('Converted from Prospect to Customer'));
     expect(conversionAct).toBeDefined();
   });
+
+  it('enforces tower floor limits on bulk generation, unit creation, and unit update', async () => {
+    const { db, org, project } = await setupProjectFixture();
+
+    // Create a tower with only 5 floors
+    const tower5 = await createTowerService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      name: 'Tower Beta 5 Floors',
+      code: 'TB5',
+      towerType: 'TOWER',
+      totalFloors: 5,
+    });
+
+    // 1. Bulk generation: attempt to generate up to floor 10 on a 5-floor tower -> must throw
+    await expect(
+      bulkGenerateTowerUnitsService(db, ADMIN, 'BUILDER_ADMIN', {
+        orgId: org.id,
+        projectId: project.id,
+        towerId: tower5.id,
+        towerCode: tower5.code,
+        towerName: tower5.name,
+        startFloor: 1,
+        endFloor: 10,
+        unitsPerFloor: 4,
+        startUnitNumber: 1,
+        bhk: '2 BHK',
+        saleableAreaSqft: 1200,
+        carpetAreaSqft: 840,
+        facing: 'EAST',
+        baseRatePerSqft: 7500,
+      })
+    ).rejects.toThrow(/cannot exceed tower "Tower Beta 5 Floors" total floors \(5\)/);
+
+    // 2. Bulk generation: generating up to floor 5 is allowed!
+    const bulkValid = await bulkGenerateTowerUnitsService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      towerId: tower5.id,
+      towerCode: tower5.code,
+      towerName: tower5.name,
+      startFloor: 1,
+      endFloor: 5,
+      unitsPerFloor: 2,
+      startUnitNumber: 1,
+      bhk: '2 BHK',
+      saleableAreaSqft: 1200,
+      carpetAreaSqft: 840,
+      facing: 'EAST',
+      baseRatePerSqft: 7500,
+    });
+    expect(bulkValid.createdCount).toBe(10); // 5 floors * 2 units
+
+    // 3. Single unit creation: attempt to create unit on floor 6 -> must throw
+    await expect(
+      createUnitService(db, ADMIN, 'BUILDER_ADMIN', {
+        orgId: org.id,
+        projectId: project.id,
+        towerId: tower5.id,
+        towerName: tower5.name,
+        floorNumber: 6,
+        series: '01',
+        unitNumber: 'TB5-601',
+        unitType: 'APARTMENT',
+        bhk: '2 BHK',
+        saleableAreaSqft: 1200,
+        carpetAreaSqft: 840,
+        facing: 'EAST',
+        baseRatePerSqft: 7500,
+        isCorner: false,
+        parkingEntitlementCount: 1,
+        listingMode: 'BUY',
+      })
+    ).rejects.toThrow(/exceeds tower "Tower Beta 5 Floors" total floors \(5\)/);
+
+    // 4. Update unit: create valid unit on floor 4, then attempt to update to floor 8 -> must throw
+    const validUnit = await createUnitService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      towerId: tower5.id,
+      towerName: tower5.name,
+      floorNumber: 4,
+      series: '03',
+      unitNumber: 'TB5-403',
+      unitType: 'APARTMENT',
+      bhk: '2 BHK',
+      saleableAreaSqft: 1200,
+      carpetAreaSqft: 840,
+      facing: 'WEST',
+      baseRatePerSqft: 7500,
+      isCorner: false,
+      parkingEntitlementCount: 1,
+      listingMode: 'BUY',
+    });
+
+    await expect(
+      updateUnitService(db, ADMIN, 'BUILDER_ADMIN', {
+        orgId: org.id,
+        unitId: validUnit.id,
+        floorNumber: 8,
+      })
+    ).rejects.toThrow(/exceeds tower "Tower Beta 5 Floors" total floors \(5\)/);
+  });
 });

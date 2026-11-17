@@ -8,6 +8,7 @@ import {
   type Lead,
   type Project,
   type ProjectStats,
+  type Tower,
   type Unit,
   type UnitStatus,
 } from '@bharat-makaan/shared';
@@ -91,6 +92,19 @@ export async function createUnitService(
           'already-exists',
           `Series "${series}" already exists on floor ${input.floorNumber} of this ${input.towerId ? 'tower' : 'project'}.`
         );
+      }
+    }
+
+    if (input.towerId && input.floorNumber > 0) {
+      const towerSnap = await tx.get(db.collection('towers').doc(input.towerId));
+      if (towerSnap.exists) {
+        const towerData = towerSnap.data() as Tower;
+        if (towerData.totalFloors && towerData.totalFloors > 0 && input.floorNumber > towerData.totalFloors) {
+          throw new HttpsError(
+            'invalid-argument',
+            `Floor number ${input.floorNumber} exceeds tower "${towerData.name}" total floors (${towerData.totalFloors}).`
+          );
+        }
       }
     }
 
@@ -274,6 +288,19 @@ export async function updateUnitService(
           'already-exists',
           `Series "${nextSeries}" already exists on floor ${nextFloor} of this ${unit.towerId ? 'tower' : 'project'}.`
         );
+      }
+    }
+
+    if (unit.towerId && nextFloor > 0 && (input.floorNumber !== undefined)) {
+      const towerSnap = await tx.get(db.collection('towers').doc(unit.towerId));
+      if (towerSnap.exists) {
+        const towerData = towerSnap.data() as Tower;
+        if (towerData.totalFloors && towerData.totalFloors > 0 && nextFloor > towerData.totalFloors) {
+          throw new HttpsError(
+            'invalid-argument',
+            `Floor number ${nextFloor} exceeds tower "${towerData.name}" total floors (${towerData.totalFloors}).`
+          );
+        }
       }
     }
 
@@ -563,6 +590,19 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
   const input = bulkGenerateUnitsSchema.parse(rawInput);
   if (input.endFloor < input.startFloor) {
     throw new HttpsError('invalid-argument', 'End floor must be >= start floor.');
+  }
+
+  if (input.towerId) {
+    const towerSnap = await db.collection('towers').doc(input.towerId).get();
+    if (towerSnap.exists) {
+      const towerData = towerSnap.data() as Tower;
+      if (towerData.totalFloors && towerData.totalFloors > 0 && input.endFloor > towerData.totalFloors) {
+        throw new HttpsError(
+          'invalid-argument',
+          `End floor (${input.endFloor}) cannot exceed tower "${towerData.name}" total floors (${towerData.totalFloors}).`
+        );
+      }
+    }
   }
   const totalCount = (input.endFloor - input.startFloor + 1) * input.unitsPerFloor;
   if (totalCount > 240) {
