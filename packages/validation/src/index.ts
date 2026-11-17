@@ -311,6 +311,7 @@ export const createUnitSchema = z
     pricingMode: z.enum(['PER_AREA', 'BASE_UNIT_PRICE']).default('PER_AREA'),
     baseUnitPrice: z.coerce.number().nonnegative().optional(),
     baseRatePerSqft: z.coerce.number().nonnegative('Base rate must be >= 0'),
+    floorPlanStoragePath: z.string().max(500).optional(),
     listingMode: z.enum(['BUY', 'RENT', 'LEASE']).default('BUY'),
     monthlyRentInr: z.coerce.number().nonnegative().optional(),
     isPublicPublished: z.boolean().default(false),
@@ -342,6 +343,8 @@ export const unitStatusTransitionSchema = z.object({
     'EXPIRE',
   ]),
   holdDurationHours: z.coerce.number().int().min(1).max(720).optional(),
+  holdAdvanceAmount: z.coerce.number().nonnegative().max(1000000000).optional(),
+  holdPaymentReference: z.string().max(150).optional(),
   leadId: z.string().optional(),
   reason: z.string().max(300).optional(),
 });

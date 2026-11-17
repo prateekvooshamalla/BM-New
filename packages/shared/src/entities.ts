@@ -321,6 +321,9 @@ export interface Unit {
   holdExpiresAt?: ISODateString | null;
   heldByUid?: string | null;
   heldForLeadId?: string | null;
+  holdAdvanceAmount?: number;
+  holdPaymentReference?: string | null;
+  floorPlanStoragePath?: string | null;
   activeBookingId?: string | null;
   floorPlanVersionId?: string | null;
   isPublicPublished: boolean;

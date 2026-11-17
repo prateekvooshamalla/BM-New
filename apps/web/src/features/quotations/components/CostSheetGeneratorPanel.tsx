@@ -23,6 +23,7 @@ import {
   type Quotation,
   type Tower,
   type Unit,
+  type Lead,
 } from '@bharat-makaan/shared';
 import { callBackendFunction } from '@/lib/firebase';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
@@ -90,6 +91,12 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
   const [custName, setCustName] = React.useState<string>('');
   const [custPhone, setCustPhone] = React.useState<string>('');
   const [custEmail, setCustEmail] = React.useState<string>('');
+  const [customerLeadId, setCustomerLeadId] = React.useState('NEW');
+  const [customerLeads, setCustomerLeads] = React.useState<Lead[]>([]);
+  React.useEffect(() => {
+    if (!activeOrgId) return;
+    return subscribeTenantCollection<Lead>({ orgId: activeOrgId, collectionName: 'leads', onData: setCustomerLeads });
+  }, [activeOrgId]);
   const [terms, setTerms] = React.useState<string>(
     '1. Quotation valid for 15 days subject to unit availability. 2. Cheques/RTGS in favour of Builder RERA Escrow Account. 3. Stamp duty & registration extra at actuals.'
   );
@@ -248,6 +255,15 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
     setBusy(true);
     setBanner(null);
     try {
+      let leadId = customerLeadId;
+      if (leadId === 'NEW') {
+        const result = await callBackendFunction<unknown, { lead: Lead }>('createLead', {
+          orgId: activeOrgId, projectId, customerName: custName, phone: custPhone,
+          email: custEmail, source: 'MANUAL', whatsappOptIn: false,
+        });
+        leadId = result.lead.id;
+        setCustomerLeadId(leadId);
+      }
       const res = await callBackendFunction<
         any,
         { quotation: Quotation; pdfBase64: string }
@@ -255,6 +271,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
         orgId: activeOrgId,
         projectId,
         unitId: selectedUnit.id,
+        leadId,
         priceBookId: selectedPb.id,
         paymentPlanId: selectedPlan.id,
         customer: {
@@ -467,7 +484,8 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
 
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
-                    <Label>Approved Price Book *</Label>
+                    <Label>Detailed charges — approved price book *</Label>
+                    {selectedUnit && <p className="text-xs text-muted-foreground">Base rate: {formatInr(selectedUnit.baseRatePerSqft)} / sq.ft., saved on this flat. The price book supplies additional charges and taxes.</p>}
                     <Select value={selectedPbId} onValueChange={setSelectedPbId}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -553,9 +571,19 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
 
                 <div className="border-t border-border pt-3 space-y-2.5">
                   <div className="text-xs font-semibold">Customer Details</div>
+                  <Select value={customerLeadId} onValueChange={(id) => {
+                    setCustomerLeadId(id);
+                    const lead = customerLeads.find((item) => item.id === id);
+                    setCustName(lead?.customerName ?? ''); setCustPhone(lead?.normalizedPhone ?? ''); setCustEmail(lead?.normalizedEmail ?? '');
+                  }}>
+                    <SelectTrigger><SelectValue placeholder="Select customer lead" /></SelectTrigger>
+                    <SelectContent><SelectItem value="NEW">Create new customer lead</SelectItem>{customerLeads.map((lead) => <SelectItem key={lead.id} value={lead.id}>{lead.customerName} — {lead.normalizedPhone}</SelectItem>)}</SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">A quotation creates a lead only. Hold or reserve the flat from inventory when the customer pays an advance.</p>
                   <Input
                     required
                     placeholder="Customer Full Name *"
+                    readOnly={customerLeadId !== 'NEW'}
                     value={custName}
                     onChange={(e) => setCustName(e.target.value)}
                   />
@@ -563,12 +591,14 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                     <Input
                       required
                       placeholder="Phone (+91...) *"
+                      readOnly={customerLeadId !== 'NEW'}
                       value={custPhone}
                       onChange={(e) => setCustPhone(e.target.value)}
                     />
                     <Input
                       type="email"
                       placeholder="Email"
+                      readOnly={customerLeadId !== 'NEW'}
                       value={custEmail}
                       onChange={(e) => setCustEmail(e.target.value)}
                     />

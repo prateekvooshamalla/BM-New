@@ -431,6 +431,12 @@ export async function createQuotationService(
   }
 
   const org = orgSnap.data() as Organization;
+  if (input.leadId) {
+    const lead = await db.collection('leads').doc(input.leadId).get();
+    if (!lead.exists || lead.data()?.orgId !== input.orgId) {
+      throw new HttpsError('permission-denied', 'Customer lead must belong to this organization.');
+    }
+  }
   const project = projSnap.data() as Project;
   const unit = unitSnap.data() as Unit;
   const priceBook = pbSnap.data() as PriceBook;

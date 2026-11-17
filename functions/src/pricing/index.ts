@@ -424,7 +424,8 @@ export async function activatePriceBookService(
     const oldTotal = unit.calculatedTotalPrice;
     const oldBaseRate = unit.baseRatePerSqft;
     const computed = calculateCostSheet({
-      unit,
+      // Activation is an explicit rate revision; quotations use the saved unit rate.
+      unit: { ...unit, baseRatePerSqft: undefined },
       priceBook: activatedBook,
       overrides,
     });

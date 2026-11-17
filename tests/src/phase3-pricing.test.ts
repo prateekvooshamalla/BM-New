@@ -119,6 +119,8 @@ describe('Phase 3 — Dynamic Pricing Engine: Editable Labels, Approvals, Immuta
     });
 
     const computedPreview = calculateCostSheet({ unit: unitAvail, priceBook: draftV1 });
+    expect(computedPreview.baseRatePerSqft).toBe(9000);
+    expect(computedPreview.basePriceInr).toBe(2000 * 9000);
     const amenitiesItem = computedPreview.lineItems.find(
       (l) => l.internalKey === 'amenities_charges'
     );

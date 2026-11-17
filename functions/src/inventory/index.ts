@@ -43,6 +43,9 @@ export async function createUnitService(
   rawInput: unknown
 ): Promise<Unit> {
   const input = createUnitSchema.parse(rawInput);
+  if (input.floorPlanStoragePath && !input.floorPlanStoragePath.startsWith(`organizations/${input.orgId}/projects/${input.projectId}/floorplans/`)) {
+    throw new HttpsError('invalid-argument', 'Floor plan must belong to this project.');
+  }
   const nowIso = new Date().toISOString();
 
   return db.runTransaction(async (tx) => {
@@ -118,6 +121,7 @@ export async function createUnitService(
       heldForLeadId: null,
       activeBookingId: null,
       floorPlanVersionId: null,
+      floorPlanStoragePath: input.floorPlanStoragePath ?? null,
       isPublicPublished: input.isPublicPublished,
       listingMode: input.listingMode,
       monthlyRentInr: input.monthlyRentInr,
@@ -222,6 +226,19 @@ export async function transitionUnitStatusService(
     }
 
     const projRef = db.collection('projects').doc(unit.projectId);
+    if (input.action === 'HOLD' || input.action === 'RESERVE') {
+      const leadId = input.leadId ?? unit.heldForLeadId;
+      if (leadId) {
+        const lead = await tx.get(db.collection('leads').doc(leadId));
+        if (!lead.exists || lead.data()?.orgId !== input.orgId) {
+          throw new HttpsError('permission-denied', 'Customer must belong to this organization.');
+        }
+      }
+      if ((input.holdAdvanceAmount ?? 0) > 0 && !leadId) throw new HttpsError('invalid-argument', 'Select a customer for the advance.');
+      if ((input.holdAdvanceAmount ?? 0) > 0 && !input.holdPaymentReference?.trim()) {
+        throw new HttpsError('invalid-argument', 'Enter a receipt or payment reference for the advance.');
+      }
+    }
     const projSnap = await tx.get(projRef);
 
     const holdHours = input.holdDurationHours ?? 48;
@@ -233,6 +250,8 @@ export async function transitionUnitStatusService(
     const updatedUnit: Unit = {
       ...unit,
       status: input.targetStatus,
+      holdAdvanceAmount: input.targetStatus === 'AVAILABLE' ? 0 : (input.holdAdvanceAmount ?? unit.holdAdvanceAmount ?? 0),
+      holdPaymentReference: input.targetStatus === 'AVAILABLE' ? null : (input.holdPaymentReference ?? unit.holdPaymentReference ?? null),
       holdExpiresAt,
       heldByUid:
         input.targetStatus === 'ON_HOLD' || input.targetStatus === 'RESERVED'
@@ -279,6 +298,9 @@ export async function transitionUnitStatusService(
           status: updatedUnit.status,
           heldByUid: updatedUnit.heldByUid,
           holdExpiresAt: updatedUnit.holdExpiresAt,
+          heldForLeadId: updatedUnit.heldForLeadId,
+          advanceAmount: updatedUnit.holdAdvanceAmount,
+          paymentReference: updatedUnit.holdPaymentReference,
           reason: input.reason ?? null,
         },
       },
@@ -312,6 +334,8 @@ const bulkGenerateUnitsSchema = z.object({
   startFloor: z.coerce.number().int().min(0).max(200),
   endFloor: z.coerce.number().int().min(0).max(200),
   unitsPerFloor: z.coerce.number().int().min(1).max(50),
+  floorPlanStoragePath: z.string().max(500).optional(),
+  startUnitNumber: z.coerce.number().int().min(1).max(99).default(1),
   bhk: z.string().min(1),
   saleableAreaSqft: z.coerce.number().positive(),
   carpetAreaSqft: z.coerce.number().positive(),
@@ -329,15 +353,8 @@ const bulkGenerateUnitsSchema = z.object({
   parkingEntitlementCount: z.coerce.number().int().min(0).max(20).default(1),
 });
 
-export const bulkGenerateTowerUnits = onCall(async (request) => {
-  const input = bulkGenerateUnitsSchema.parse(request.data);
-  const { actor, member } = await requireOrgPermission(
-    request,
-    input.orgId,
-    'inventory:manage',
-    input.projectId
-  );
-
+export async function bulkGenerateTowerUnitsService(db: Firestore, actor: AuthenticatedActor, actorRole: string, rawInput: unknown) {
+  const input = bulkGenerateUnitsSchema.parse(rawInput);
   if (input.endFloor < input.startFloor) {
     throw new HttpsError('invalid-argument', 'End floor must be >= start floor.');
   }
@@ -346,18 +363,22 @@ export const bulkGenerateTowerUnits = onCall(async (request) => {
     throw new HttpsError('invalid-argument', 'Maximum 240 units per bulk generation batch.');
   }
 
+  if (input.startUnitNumber + input.unitsPerFloor - 1 > 99) {
+    throw new HttpsError('invalid-argument', 'Flat numbers per floor must be between 01 and 99.');
+  }
   let created = 0;
+  let skipped = 0;
   for (let fl = input.startFloor; fl <= input.endFloor; fl++) {
-    for (let idx = 1; idx <= input.unitsPerFloor; idx++) {
+    for (let idx = input.startUnitNumber; idx < input.startUnitNumber + input.unitsPerFloor; idx++) {
       const flatNo =
         fl === 0
           ? `${input.towerCode.toUpperCase()}-${String(idx).padStart(2, '0')}`
           : `${input.towerCode.toUpperCase()}-${fl}${String(idx).padStart(2, '0')}`;
       try {
         await createUnitService(
-          adminDb,
+          db,
           actor,
-          member?.role ?? 'PLATFORM_SUPER_ADMIN',
+          actorRole,
           {
             orgId: input.orgId,
             projectId: input.projectId,
@@ -370,22 +391,30 @@ export const bulkGenerateTowerUnits = onCall(async (request) => {
             saleableAreaSqft: input.saleableAreaSqft,
             carpetAreaSqft: input.carpetAreaSqft,
             facing: input.facing,
-            isCorner: idx === 1 || idx === input.unitsPerFloor,
+            isCorner: idx === input.startUnitNumber || idx === input.startUnitNumber + input.unitsPerFloor - 1,
             balconiesCount: input.unitType === 'PLOT' ? 0 : 2,
             parkingEntitlementCount: input.parkingEntitlementCount,
             baseRatePerSqft: input.baseRatePerSqft,
+            floorPlanStoragePath: input.floorPlanStoragePath,
             listingMode: 'BUY',
             isPublicPublished: false,
           }
         );
         created++;
-      } catch {
-        // Skip already existing unit numbers idempotently
+      } catch (error) {
+        if (error instanceof HttpsError && error.code === 'already-exists') skipped++;
+        else throw error;
       }
     }
   }
 
-  return { createdCount: created };
+  return { createdCount: created, skippedCount: skipped };
+}
+
+export const bulkGenerateTowerUnits = onCall(async (request) => {
+  const input = bulkGenerateUnitsSchema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(request, input.orgId, 'inventory:manage', input.projectId);
+  return bulkGenerateTowerUnitsService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', input);
 });
 
 export const transitionUnitStatus = onCall(async (request) => {

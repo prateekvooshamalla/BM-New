@@ -239,6 +239,7 @@ export interface CalculateCostSheetInput {
         | 'secondaryArea'
         | 'pricingMode'
         | 'baseUnitPrice'
+        | 'baseRatePerSqft'
       >
     >;
   priceBook: PriceBook;
@@ -306,7 +307,10 @@ export function calculateCostSheet(input: CalculateCostSheetInput): CostSheetBre
     },
   });
 
-  const priceBook = resolved.effectivePriceBook;
+  const priceBook = {
+    ...resolved.effectivePriceBook,
+    basePricePerSqft: unit.baseRatePerSqft ?? resolved.effectivePriceBook.basePricePerSqft,
+  };
   const currencyCode = unit.currencyCode ?? priceBook.currencyCode ?? 'INR';
   const areaUnit = unit.areaUnit ?? priceBook.areaUnit ?? 'SQFT';
   const pricingMode = unit.pricingMode ?? priceBook.pricingMode ?? 'PER_AREA';

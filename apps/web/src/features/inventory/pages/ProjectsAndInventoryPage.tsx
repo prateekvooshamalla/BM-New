@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { where } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   Building2,
   Calculator,
@@ -29,8 +30,9 @@ import {
   type Tower,
   type Unit,
   type UnitStatus,
+  type Lead,
 } from '@bharat-makaan/shared';
-import { callBackendFunction } from '@/lib/firebase';
+import { callBackendFunction, storage } from '@/lib/firebase';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -167,6 +169,29 @@ export function ProjectsAndInventoryPage() {
   const [unitParkingEntitled, setUnitParkingEntitled] = React.useState('2');
   const [unitCorner, setUnitCorner] = React.useState(false);
   const [unitPublished, setUnitPublished] = React.useState(false);
+  const [floorPlanUrl, setFloorPlanUrl] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let active = true;
+    setFloorPlanUrl(null);
+    if (selectedUnit?.floorPlanStoragePath) {
+      getDownloadURL(ref(storage, selectedUnit.floorPlanStoragePath)).then((url) => { if (active) setFloorPlanUrl(url); }).catch(() => { if (active) setBannerMsg('Unable to load floor plan. Check your document access.'); });
+    }
+    return () => { active = false; };
+  }, [selectedUnit?.floorPlanStoragePath]);
+  const [floorPlan, setFloorPlan] = React.useState<File | null>(null);
+  const [holdCustomer, setHoldCustomer] = React.useState('');
+  const [holdAdvance, setHoldAdvance] = React.useState('0');
+  const [holdReference, setHoldReference] = React.useState('');
+  const [customerLeads, setCustomerLeads] = React.useState<Lead[]>([]);
+  React.useEffect(() => {
+    setHoldCustomer(selectedUnit?.heldForLeadId ?? '');
+    setHoldAdvance(String(selectedUnit?.holdAdvanceAmount ?? 0));
+    setHoldReference(selectedUnit?.holdPaymentReference ?? '');
+  }, [selectedUnit?.id]);
+  React.useEffect(() => {
+    if (!activeOrgId) return;
+    return subscribeTenantCollection<Lead>({ orgId: activeOrgId, collectionName: 'leads', onData: setCustomerLeads });
+  }, [activeOrgId]);
 
   // Bulk Generator Form
   const [bulkTowerId, setBulkTowerId] = React.useState('');
@@ -176,7 +201,14 @@ export function ProjectsAndInventoryPage() {
   const [bulkBhk, setBulkBhk] = React.useState('3 BHK');
   const [bulkSaleable, setBulkSaleable] = React.useState('1850');
   const [bulkCarpet, setBulkCarpet] = React.useState('1295');
+  const [bulkFloorPlan, setBulkFloorPlan] = React.useState<File | null>(null);
   const [bulkRate, setBulkRate] = React.useState('8800');
+  const [bulkStartUnit, setBulkStartUnit] = React.useState('1');
+  React.useEffect(() => {
+    const existing = units.filter((unit) => unit.towerId === bulkTowerId && unit.floorNumber >= Number(bulkStartFloor) && unit.floorNumber <= Number(bulkEndFloor));
+    const last = Math.max(0, ...existing.map((unit) => Number(unit.unitNumber.slice(-2))).filter(Number.isFinite));
+    setBulkStartUnit(String(last + 1));
+  }, [bulkTowerId, bulkStartFloor, bulkEndFloor, units]);
 
   const currentProjectId = activeProjectId ?? projects[0]?.id ?? null;
 
@@ -404,7 +436,15 @@ export function ProjectsAndInventoryPage() {
     e.preventDefault();
     if (!activeOrgId || !currentProjectId) return;
     setBusy(true);
+    let uploadedPath: string | undefined;
     try {
+      if (floorPlan) {
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(floorPlan.type) || floorPlan.size > 10 * 1024 * 1024) {
+          throw new Error('Choose a JPG, PNG or WebP floor plan smaller than 10 MB.');
+        }
+        uploadedPath = `organizations/${activeOrgId}/projects/${currentProjectId}/floorplans/${crypto.randomUUID()}`;
+        await uploadBytes(ref(storage, uploadedPath), floorPlan, { contentType: floorPlan.type });
+      }
       const selectedTowerObj = towers.find((t) => t.id === unitTowerId);
       const createdUnit = await callBackendFunction<any, Unit>('createUnit', {
         orgId: activeOrgId,
@@ -424,10 +464,12 @@ export function ProjectsAndInventoryPage() {
         baseRatePerSqft: Number(unitBaseRate),
         listingMode: 'BUY',
         isPublicPublished: unitPublished,
+        ...(uploadedPath ? { floorPlanStoragePath: uploadedPath } : {}),
       });
       setUnits((prev) => [...prev.filter((u) => u.id !== createdUnit.id), createdUnit]);
       setCreateUnitOpen(false);
       setUnitNumber('');
+      setFloorPlan(null);
       setBannerMsg(`Added unit ${unitNumber.toUpperCase()} to inventory.`);
     } catch (err) {
       setBannerMsg(err instanceof Error ? err.message : 'Failed to create unit.');
@@ -443,7 +485,13 @@ export function ProjectsAndInventoryPage() {
     if (!tObj) return;
     setBusy(true);
     try {
-      const res = await callBackendFunction<any, { createdCount: number }>(
+      let floorPlanStoragePath: string | undefined;
+      if (bulkFloorPlan) {
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(bulkFloorPlan.type) || bulkFloorPlan.size > 10 * 1024 * 1024) throw new Error('Choose a JPG, PNG or WebP image up to 10 MB.');
+        floorPlanStoragePath = `organizations/${activeOrgId}/projects/${currentProjectId}/floorplans/${crypto.randomUUID()}`;
+        await uploadBytes(ref(storage, floorPlanStoragePath), bulkFloorPlan, { contentType: bulkFloorPlan.type });
+      }
+      const res = await callBackendFunction<any, { createdCount: number; skippedCount: number }>(
         'bulkGenerateTowerUnits',
         {
           orgId: activeOrgId,
@@ -454,6 +502,8 @@ export function ProjectsAndInventoryPage() {
           startFloor: Number(bulkStartFloor),
           endFloor: Number(bulkEndFloor),
           unitsPerFloor: Number(bulkUnitsPerFloor),
+          startUnitNumber: Number(bulkStartUnit),
+          ...(floorPlanStoragePath ? { floorPlanStoragePath } : {}),
           bhk: bulkBhk,
           saleableAreaSqft: Number(bulkSaleable),
           carpetAreaSqft: Number(bulkCarpet),
@@ -463,7 +513,8 @@ export function ProjectsAndInventoryPage() {
         }
       );
       setBulkWizardOpen(false);
-      setBannerMsg(`Generated ${res.createdCount} units across ${tObj.name}.`);
+      setBulkFloorPlan(null);
+      setBannerMsg(`Generated ${res.createdCount} units across ${tObj.name}. ${res.skippedCount ?? 0} existing flat numbers skipped. Use the next starting flat number for another size.`);
     } catch (err) {
       setBannerMsg(err instanceof Error ? err.message : 'Bulk generation failed.');
     } finally {
@@ -477,6 +528,10 @@ export function ProjectsAndInventoryPage() {
     action: 'HOLD' | 'RESERVE' | 'RELEASE' | 'CANCEL'
   ) => {
     if (!activeOrgId) return;
+    if ((action === 'HOLD' || action === 'RESERVE') && !holdCustomer && !unit.heldForLeadId) {
+      setBannerMsg('Select a customer lead before holding or reserving this flat.');
+      return;
+    }
     setBusy(true);
     try {
       const updated = await callBackendFunction<any, Unit>('transitionUnitStatus', {
@@ -485,6 +540,9 @@ export function ProjectsAndInventoryPage() {
         targetStatus,
         action,
         holdDurationHours: 48,
+        leadId: holdCustomer || unit.heldForLeadId || undefined,
+        holdAdvanceAmount: Number(holdAdvance),
+        holdPaymentReference: holdReference || undefined,
         reason: transitionReason || `Authorized ${action} action`,
       });
       setSelectedUnit(updated);
@@ -956,6 +1014,14 @@ export function ProjectsAndInventoryPage() {
                 <div className="text-xs font-semibold text-foreground">
                   Inventory Workflow & Cost Sheet Actions
                 </div>
+                {floorPlanUrl && <a className="block text-primary underline text-sm" href={floorPlanUrl} target="_blank" rel="noopener noreferrer">View floor plan</a>}
+                <Label>Customer lead for hold / reservation</Label>
+                <Select value={holdCustomer || selectedUnit.heldForLeadId || ''} onValueChange={setHoldCustomer}>
+                  <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
+                  <SelectContent>{customerLeads.map((lead) => <SelectItem key={lead.id} value={lead.id}>{lead.customerName} — {lead.normalizedPhone}</SelectItem>)}</SelectContent>
+                </Select>
+                <Label>Advance paid</Label><Input type="number" min={0} step="0.01" value={holdAdvance} onChange={(e) => setHoldAdvance(e.target.value)} />
+                <Label>Receipt / payment reference</Label><Input value={holdReference} onChange={(e) => setHoldReference(e.target.value)} />
                 <Input
                   placeholder="Optional / required reason for hold, release, or cancellation..."
                   value={transitionReason}
@@ -1306,6 +1372,7 @@ export function ProjectsAndInventoryPage() {
               </label>
             </div>
             <DialogFooter>
+              <div><Label>Floor plan image (optional, up to 10 MB)</Label><Input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setFloorPlan(e.target.files?.[0] ?? null)} /></div>
               <Button type="submit" disabled={busy}>Create Unit</Button>
             </DialogFooter>
           </form>
@@ -1345,6 +1412,9 @@ export function ProjectsAndInventoryPage() {
               <div className="space-y-1">
                 <Label>Units / Floor</Label>
                 <Input type="number" min={1} max={16} value={bulkUnitsPerFloor} onChange={(e) => setBulkUnitsPerFloor(e.target.value)} />
+                <Label>Starting flat number per floor</Label>
+                <Input type="number" min={1} max={99} value={bulkStartUnit} onChange={(e) => setBulkStartUnit(e.target.value)} />
+                <p className="text-xs text-muted-foreground">Use 3 to add flats 03 onwards when 01–02 already exist.</p>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1365,6 +1435,7 @@ export function ProjectsAndInventoryPage() {
                 <Input type="number" value={bulkCarpet} onChange={(e) => setBulkCarpet(e.target.value)} />
               </div>
             </div>
+            <div className="space-y-1"><Label>Floorplan image (optional)</Label><Input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setBulkFloorPlan(e.target.files?.[0] ?? null)} /><p className="text-xs text-muted-foreground">Applied to all flats in this batch. JPG, PNG or WebP, up to 10 MB.</p></div>
             <DialogFooter>
               <Button type="submit" disabled={busy || !bulkTowerId}>
                 {busy ? 'Generating...' : 'Generate Inventory'}
