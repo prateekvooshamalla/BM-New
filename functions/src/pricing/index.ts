@@ -92,6 +92,108 @@ export const DEFAULT_LINE_ITEMS_TEMPLATE: CostSheetLineItemRule[] = [
   },
 ];
 
+export async function applyPriceBookToInventory(
+  db: Firestore,
+  orgId: string,
+  projectId: string,
+  priceBook: PriceBook,
+  actor: AuthenticatedActor,
+  reason: string,
+  previousPriceBookId?: string | null
+): Promise<{ updatedUnitsCount: number; revisionsCreated: number }> {
+  const nowIso = new Date().toISOString();
+
+  const [unitsSnap, overridesSnap] = await Promise.all([
+    db
+      .collection('units')
+      .where('orgId', '==', orgId)
+      .where('projectId', '==', projectId)
+      .get(),
+    db.collection('pricing_overrides').where('orgId', '==', orgId).get(),
+  ]);
+
+  const overrides = overridesSnap.docs.map((d) => d.data() as PricingScopeOverride);
+
+  let updatedUnitsCount = 0;
+  let revisionsCreated = 0;
+  const batch = db.batch();
+
+  for (const unitDoc of unitsSnap.docs) {
+    const unit = unitDoc.data() as Unit;
+    if (
+      unit.status === 'BOOKED' ||
+      unit.status === 'AGREEMENT' ||
+      unit.status === 'REGISTERED'
+    ) {
+      continue; // Sold/booked units retain their contracted booking price
+    }
+
+    const oldTotal = unit.calculatedTotalPrice;
+    const oldBaseRate = unit.baseRatePerSqft;
+    const computed = calculateCostSheet({
+      unit: { ...unit, baseRatePerSqft: undefined },
+      priceBook,
+      overrides,
+    });
+
+    const newTotal = computed.totalPayableInr;
+    const premiumSum =
+      computed.facingPremiumInr +
+      computed.viewPremiumInr +
+      computed.cornerPremiumInr +
+      computed.locationPremiumInr +
+      computed.unitSpecificPremiumInr;
+
+    batch.update(unitDoc.ref, {
+      baseRatePerSqft: computed.baseRatePerSqft,
+      activePriceBookId: priceBook.id,
+      floorRiseAmount: computed.floorRiseInr,
+      premiumChargesAmount: premiumSum,
+      calculatedTotalPrice: newTotal,
+      calculatedTotalMinor: computed.totalPayableMinor,
+      updatedAt: nowIso,
+    });
+    updatedUnitsCount++;
+
+    if (oldTotal !== newTotal || oldBaseRate !== computed.baseRatePerSqft) {
+      const revRef = db.collection('price_revisions').doc();
+      const changeAmount = newTotal - oldTotal;
+      const changePct =
+        oldTotal > 0 ? Number(((changeAmount / oldTotal) * 100).toFixed(2)) : 0;
+
+      const revision: PriceRevision = {
+        id: revRef.id,
+        orgId,
+        projectId,
+        unitId: unit.id,
+        unitNumber: unit.unitNumber,
+        previousPriceBookId: previousPriceBookId ?? unit.activePriceBookId ?? null,
+        newPriceBookId: priceBook.id,
+        priceBookVersion: priceBook.versionNumber,
+        oldBaseRate,
+        newBaseRate: computed.baseRatePerSqft,
+        oldTotalValue: oldTotal,
+        newTotalValue: newTotal,
+        changeAmount,
+        changePct,
+        effectiveDate: priceBook.effectiveFrom,
+        changedByUid: actor.uid,
+        approvedByUid: priceBook.approvedByUid ?? actor.uid,
+        reason,
+        createdAt: nowIso,
+      };
+      batch.set(revRef, revision);
+      revisionsCreated++;
+    }
+  }
+
+  if (updatedUnitsCount > 0) {
+    await batch.commit();
+  }
+
+  return { updatedUnitsCount, revisionsCreated };
+}
+
 export async function savePriceBookDraftService(
   db: Firestore,
   actor: AuthenticatedActor,
@@ -109,12 +211,23 @@ export async function savePriceBookDraftService(
     }
     const existing = existingSnap.data() as PriceBook;
 
-    if (existing.isImmutable || isPriceBookImmutable(existing.status)) {
+    if (existing.status === 'ARCHIVED' || existing.status === 'APPROVED') {
       throw new HttpsError(
         'failed-precondition',
         `Price book v${existing.versionNumber} (${existing.status}) is immutable. Clone a new version to make changes.`
       );
     }
+
+    if (existing.isImmutable && !input.applyToInventory) {
+      throw new HttpsError(
+        'failed-precondition',
+        `Price book v${existing.versionNumber} (${existing.status}) is immutable. Clone a new version to make changes.`
+      );
+    }
+
+    const shouldApply = input.applyToInventory === true || existing.status === 'ACTIVE';
+    const status: PriceBook['status'] = shouldApply ? 'ACTIVE' : 'DRAFT';
+    const isImmutable = shouldApply ? true : false;
 
     const updated: PriceBook = {
       ...existing,
@@ -143,21 +256,55 @@ export async function savePriceBookDraftService(
       maxDiscountPctWithoutApproval: input.maxDiscountPctWithoutApproval,
       defaultPaymentPlanId: input.defaultPaymentPlanId ?? null,
       internalNotes: input.internalNotes,
-      status: 'DRAFT',
+      status,
+      isImmutable,
+      approvedByUid: shouldApply ? (existing.approvedByUid ?? actor.uid) : existing.approvedByUid,
+      approvedAt: shouldApply ? (existing.approvedAt ?? nowIso) : existing.approvedAt,
       updatedAt: nowIso,
     };
 
+    if (shouldApply) {
+      // Archive other active price books for this project
+      const prevActiveSnap = await db
+        .collection('price_books')
+        .where('orgId', '==', input.orgId)
+        .where('projectId', '==', input.projectId)
+        .where('status', '==', 'ACTIVE')
+        .get();
+
+      for (const docSnap of prevActiveSnap.docs) {
+        if (docSnap.id !== updated.id) {
+          await docSnap.ref.update({ status: 'ARCHIVED', isImmutable: true, updatedAt: nowIso });
+        }
+      }
+    }
+
     await existingRef.set(updated);
+
+    if (shouldApply) {
+      await applyPriceBookToInventory(
+        db,
+        input.orgId,
+        input.projectId,
+        updated,
+        actor,
+        `Updated pricing for "${updated.name}" v${updated.versionNumber}`,
+        existing.id
+      );
+    }
+
     await writeAuditEvent(db, {
       orgId: input.orgId,
       actorUid: actor.uid,
       actorEmail: actor.email,
       actorRole,
-      action: 'PRICE_BOOK_DRAFT_UPDATED',
+      action: shouldApply ? 'PRICE_BOOK_ACTIVATED' : 'PRICE_BOOK_DRAFT_UPDATED',
       category: 'PRICING',
       entityType: 'price_book',
       entityId: updated.id,
-      summary: `Updated draft price book "${updated.name}" (v${updated.versionNumber}).`,
+      summary: shouldApply
+        ? `Updated price book "${updated.name}" (v${updated.versionNumber}) and updated unbooked inventory units.`
+        : `Updated draft price book "${updated.name}" (v${updated.versionNumber}).`,
     });
 
     return updated;
@@ -183,6 +330,10 @@ export async function savePriceBookDraftService(
   const existingDraftData = existingDraftDoc ? (existingDraftDoc.data() as PriceBook) : null;
   const versionNumber = existingDraftData?.versionNumber ?? (maxVersion + 1);
 
+  const shouldApply = input.applyToInventory === true;
+  const status: PriceBook['status'] = shouldApply ? 'ACTIVE' : 'DRAFT';
+  const isImmutable = shouldApply ? true : false;
+
   const created: PriceBook = {
     id: pbRef.id,
     orgId: input.orgId,
@@ -191,8 +342,8 @@ export async function savePriceBookDraftService(
     description: input.description?.trim(),
     versionNumber,
     parentPriceBookId: null,
-    status: 'DRAFT',
-    isImmutable: false,
+    status,
+    isImmutable,
     effectiveFrom: input.effectiveFrom,
     expiresAt: input.expiresAt ?? null,
     currencyCode: input.currencyCode,
@@ -217,23 +368,46 @@ export async function savePriceBookDraftService(
     defaultPaymentPlanId: input.defaultPaymentPlanId ?? null,
     internalNotes: input.internalNotes,
     createdByUid: existingDraftData?.createdByUid ?? actor.uid,
-    approvedByUid: null,
-    approvedAt: null,
+    approvedByUid: shouldApply ? actor.uid : null,
+    approvedAt: shouldApply ? nowIso : null,
     createdAt: existingDraftData?.createdAt ?? nowIso,
     updatedAt: nowIso,
   };
 
+  if (shouldApply) {
+    // Archive other active price books for this project
+    for (const docSnap of prevBooksSnap.docs) {
+      if ((docSnap.data() as PriceBook).status === 'ACTIVE' && docSnap.id !== created.id) {
+        await docSnap.ref.update({ status: 'ARCHIVED', isImmutable: true, updatedAt: nowIso });
+      }
+    }
+  }
+
   await pbRef.set(created);
+
+  if (shouldApply) {
+    await applyPriceBookToInventory(
+      db,
+      input.orgId,
+      input.projectId,
+      created,
+      actor,
+      `Activated pricing for "${created.name}" v${created.versionNumber}`
+    );
+  }
+
   await writeAuditEvent(db, {
     orgId: input.orgId,
     actorUid: actor.uid,
     actorEmail: actor.email,
     actorRole,
-    action: 'PRICE_BOOK_DRAFT_CREATED',
+    action: shouldApply ? 'PRICE_BOOK_ACTIVATED' : 'PRICE_BOOK_DRAFT_CREATED',
     category: 'PRICING',
     entityType: 'price_book',
     entityId: created.id,
-    summary: `Created draft price book "${created.name}" (v${created.versionNumber}).`,
+    summary: shouldApply
+      ? `Created and activated price book "${created.name}" (v${created.versionNumber}) across inventory units.`
+      : `Created draft price book "${created.name}" (v${created.versionNumber}).`,
   });
 
   return created;
@@ -404,93 +578,17 @@ export async function activatePriceBookService(
     updatedAt: nowIso,
   };
   batch.set(pbRef, activatedBook);
-
-  // Load 6-level inherited pricing overrides & unbooked inventory units
-  const [unitsSnap, overridesSnap] = await Promise.all([
-    db
-      .collection('units')
-      .where('orgId', '==', params.orgId)
-      .where('projectId', '==', pb.projectId)
-      .get(),
-    db.collection('pricing_overrides').where('orgId', '==', params.orgId).get(),
-  ]);
-
-  const overrides = overridesSnap.docs.map((d) => d.data() as PricingScopeOverride);
-
-  let updatedUnitsCount = 0;
-  let revisionsCreated = 0;
-
-  for (const unitDoc of unitsSnap.docs) {
-    const unit = unitDoc.data() as Unit;
-    if (
-      unit.status === 'BOOKED' ||
-      unit.status === 'AGREEMENT' ||
-      unit.status === 'REGISTERED'
-    ) {
-      continue; // Sold/booked units retain their contracted booking price
-    }
-
-    const oldTotal = unit.calculatedTotalPrice;
-    const oldBaseRate = unit.baseRatePerSqft;
-    const computed = calculateCostSheet({
-      // Activation is an explicit rate revision; quotations use the saved unit rate.
-      unit: { ...unit, baseRatePerSqft: undefined },
-      priceBook: activatedBook,
-      overrides,
-    });
-
-    const newTotal = computed.totalPayableInr;
-    const premiumSum =
-      computed.facingPremiumInr +
-      computed.viewPremiumInr +
-      computed.cornerPremiumInr +
-      computed.locationPremiumInr +
-      computed.unitSpecificPremiumInr;
-
-    batch.update(unitDoc.ref, {
-      baseRatePerSqft: computed.baseRatePerSqft,
-      activePriceBookId: activatedBook.id,
-      floorRiseAmount: computed.floorRiseInr,
-      premiumChargesAmount: premiumSum,
-      calculatedTotalPrice: newTotal,
-      calculatedTotalMinor: computed.totalPayableMinor,
-      updatedAt: nowIso,
-    });
-    updatedUnitsCount++;
-
-    if (oldTotal !== newTotal || oldBaseRate !== computed.baseRatePerSqft) {
-      const revRef = db.collection('price_revisions').doc();
-      const changeAmount = newTotal - oldTotal;
-      const changePct =
-        oldTotal > 0 ? Number(((changeAmount / oldTotal) * 100).toFixed(2)) : 0;
-
-      const revision: PriceRevision = {
-        id: revRef.id,
-        orgId: params.orgId,
-        projectId: pb.projectId,
-        unitId: unit.id,
-        unitNumber: unit.unitNumber,
-        previousPriceBookId: previousActiveBook?.id ?? unit.activePriceBookId ?? null,
-        newPriceBookId: activatedBook.id,
-        priceBookVersion: activatedBook.versionNumber,
-        oldBaseRate,
-        newBaseRate: computed.baseRatePerSqft,
-        oldTotalValue: oldTotal,
-        newTotalValue: newTotal,
-        changeAmount,
-        changePct,
-        effectiveDate: activatedBook.effectiveFrom,
-        changedByUid: activatedBook.createdByUid,
-        approvedByUid: activatedBook.approvedByUid ?? actor.uid,
-        reason: params.reason,
-        createdAt: nowIso,
-      };
-      batch.set(revRef, revision);
-      revisionsCreated++;
-    }
-  }
-
   await batch.commit();
+
+  const { updatedUnitsCount, revisionsCreated } = await applyPriceBookToInventory(
+    db,
+    params.orgId,
+    pb.projectId,
+    activatedBook,
+    actor,
+    params.reason,
+    previousActiveBook?.id ?? null
+  );
 
   await writeAuditEvent(db, {
     orgId: params.orgId,

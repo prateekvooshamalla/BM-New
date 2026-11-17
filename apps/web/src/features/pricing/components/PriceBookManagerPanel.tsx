@@ -346,8 +346,7 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
     setLineItems((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const handleSaveDraft = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSavePriceBook = async (applyToInventory = false) => {
     if (!activeOrgId) return;
     setBusy(true);
     setBanner(null);
@@ -394,12 +393,17 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
         },
         maxDiscountPctWithoutApproval: Number(maxAutoDiscount),
         internalNotes,
+        applyToInventory,
       });
       setSelectedBookId(saved.id);
       setEditorOpen(false);
-      setBanner(`Saved draft "${saved.name}" (v${saved.versionNumber}).`);
+      if (applyToInventory) {
+        setBanner(`Saved and activated "${saved.name}" (v${saved.versionNumber})! Inventory prices updated and price revisions recorded.`);
+      } else {
+        setBanner(`Saved draft "${saved.name}" (v${saved.versionNumber}).`);
+      }
     } catch (err) {
-      setBanner(err instanceof Error ? err.message : 'Failed to save draft price book.');
+      setBanner(err instanceof Error ? err.message : 'Failed to save price book.');
     } finally {
       setBusy(false);
     }
@@ -897,7 +901,7 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
               versions become permanently immutable.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSaveDraft} className="space-y-4">
+          <form onSubmit={(e) => { e.preventDefault(); handleSavePriceBook(false); }} className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-4">
               <div className="space-y-1 sm:col-span-2">
                 <Label>Price Book Name *</Label>
@@ -1100,12 +1104,21 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
               />
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0">
               <Button type="button" variant="outline" onClick={() => setEditorOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy}>
-                {busy ? 'Saving...' : 'Save Draft Price Book'}
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => handleSavePriceBook(false)}>
+                {busy ? 'Saving...' : 'Save Draft'}
+              </Button>
+              <Button
+                type="button"
+                disabled={busy}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+                onClick={() => handleSavePriceBook(true)}
+              >
+                <Check className="h-4 w-4" />
+                {busy ? 'Applying...' : 'Save & Update Inventory'}
               </Button>
             </DialogFooter>
           </form>

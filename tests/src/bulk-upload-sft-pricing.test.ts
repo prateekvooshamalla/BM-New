@@ -174,14 +174,16 @@ describe('Bulk Upload Fields, SFT Rate Breakup & Cost Sheet PDF', () => {
     expect(sftBreakup.agreementRatePerSqft).toBe(Math.round(17642500 / 1850));
     expect(sftBreakup.netAllInclusiveRatePerSqft).toBe(Math.round(19095535 / 1850));
 
-    // Verify formatLineItemCalculation
+    // Verify formatLineItemCalculation without multiplication symbols
     const baseCalc = formatLineItemCalculation(mockBreakdown.lineItems[0], 1850, 1295);
     expect(baseCalc.rateLabel).toContain('₹8,800/sq.ft.');
-    expect(baseCalc.calculationText).toContain('1,850 sq.ft. × ₹8,800/sq.ft.');
+    expect(baseCalc.areaOrQuantity).toBe('1,850 sq.ft.');
+    expect(baseCalc.calculationText).toContain('1,850 sq.ft. @ ₹8,800/sq.ft.');
 
     const infraCalc = formatLineItemCalculation(mockBreakdown.lineItems[1], 1850, 1295);
     expect(infraCalc.rateLabel).toContain('₹150/sq.ft.');
-    expect(infraCalc.calculationText).toContain('1,850 sq.ft. × ₹150/sq.ft.');
+    expect(infraCalc.areaOrQuantity).toBe('1,850 sq.ft.');
+    expect(infraCalc.calculationText).toContain('1,850 sq.ft. @ ₹150/sq.ft.');
   });
 
   it('generates PDF cost sheet bytes containing SFT breakup and rate calculation columns', async () => {

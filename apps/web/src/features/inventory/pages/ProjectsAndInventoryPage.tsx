@@ -5,6 +5,8 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   Building2,
   Calculator,
+  Check,
+  Download,
   Edit,
   Filter,
   FolderPlus,
@@ -16,6 +18,7 @@ import {
   Plus,
   Share2,
   Sparkles,
+  TrendingUp,
   Unlock,
   UserCheck,
   UserPlus,
@@ -23,19 +26,24 @@ import {
 } from 'lucide-react';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
+  calculateCostSheet,
   formatAreaSqft,
   formatInr,
   formatInrCompact,
   type AuditEvent,
   type FacingDirection,
   type Floor,
+  type Lead,
+  type PaymentPlan,
+  type PriceBook,
+  type PriceRevision,
   type Project,
   type ProjectPhase,
+  type Quotation,
   type Tower,
   type Unit,
   type UnitStatus,
   type UnitType,
-  type Lead,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, storage } from '@/lib/firebase';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
@@ -223,6 +231,27 @@ export function ProjectsAndInventoryPage() {
     return subscribeTenantCollection<Lead>({ orgId: activeOrgId, collectionName: 'leads', onData: setCustomerLeads });
   }, [activeOrgId]);
 
+  const [priceRevisions, setPriceRevisions] = React.useState<PriceRevision[]>([]);
+  const [priceBooks, setPriceBooks] = React.useState<PriceBook[]>([]);
+  const [paymentPlans, setPaymentPlans] = React.useState<PaymentPlan[]>([]);
+  const [priceLogModalOpen, setPriceLogModalOpen] = React.useState(false);
+  const [priceLogSearch, setPriceLogSearch] = React.useState('');
+
+  // Direct Cost Sheet Modal State
+  const [costSheetModalOpen, setCostSheetModalOpen] = React.useState(false);
+  const [costSheetUnit, setCostSheetUnit] = React.useState<Unit | null>(null);
+  const [costSheetLeadId, setCostSheetLeadId] = React.useState<string>('NEW');
+  const [costSheetCustName, setCostSheetCustName] = React.useState('');
+  const [costSheetCustPhone, setCostSheetCustPhone] = React.useState('');
+  const [costSheetCustEmail, setCostSheetCustEmail] = React.useState('');
+  const [costSheetPbId, setCostSheetPbId] = React.useState('');
+  const [costSheetPlanId, setCostSheetPlanId] = React.useState('');
+  const [costSheetDiscountType, setCostSheetDiscountType] = React.useState<'NONE' | 'FIXED_INR' | 'PER_SQFT' | 'PERCENTAGE_OF_BASE'>('NONE');
+  const [costSheetDiscountVal, setCostSheetDiscountVal] = React.useState('0');
+  const [costSheetGenerating, setCostSheetGenerating] = React.useState(false);
+  const [costSheetSuccessNotice, setCostSheetSuccessNotice] = React.useState<string | null>(null);
+  const [showInlineNewCustomer, setShowInlineNewCustomer] = React.useState(false);
+
   // Bulk Generator Form
   const [bulkTowerId, setBulkTowerId] = React.useState('');
   const [bulkUnitType, setBulkUnitType] = React.useState<'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE'>('APARTMENT');
@@ -298,6 +327,210 @@ export function ProjectsAndInventoryPage() {
       unsubUnits();
     };
   }, [activeOrgId, currentProjectId]);
+
+  React.useEffect(() => {
+    if (!activeOrgId || !currentProjectId) {
+      setPriceRevisions([]);
+      setPriceBooks([]);
+      setPaymentPlans([]);
+      return;
+    }
+    const unsubRevs = subscribeTenantCollection<PriceRevision>({
+      orgId: activeOrgId,
+      collectionName: 'price_revisions',
+      projectId: currentProjectId,
+      sort: sortDescByIso<PriceRevision>('createdAt'),
+      onData: setPriceRevisions,
+    });
+    const unsubPb = subscribeTenantCollection<PriceBook>({
+      orgId: activeOrgId,
+      collectionName: 'price_books',
+      projectId: currentProjectId,
+      onData: setPriceBooks,
+    });
+    const unsubPp = subscribeTenantCollection<PaymentPlan>({
+      orgId: activeOrgId,
+      collectionName: 'payment_plans',
+      projectId: currentProjectId,
+      onData: setPaymentPlans,
+    });
+    return () => {
+      unsubRevs();
+      unsubPb();
+      unsubPp();
+    };
+  }, [activeOrgId, currentProjectId]);
+
+  const unitPriceRevisions = React.useMemo(() => {
+    if (!selectedUnit) return [];
+    return priceRevisions.filter((r) => r.unitId === selectedUnit.id);
+  }, [priceRevisions, selectedUnit]);
+
+  const liveCostSheetPb = React.useMemo(() => {
+    return (
+      priceBooks.find((pb) => pb.id === costSheetPbId) ??
+      priceBooks.find((pb) => pb.status === 'ACTIVE') ??
+      priceBooks[0] ??
+      null
+    );
+  }, [priceBooks, costSheetPbId]);
+
+  const liveCostSheetPlan = React.useMemo(() => {
+    return (
+      paymentPlans.find((p) => p.id === costSheetPlanId) ??
+      paymentPlans.find((p) => p.isActive) ??
+      paymentPlans[0] ??
+      null
+    );
+  }, [paymentPlans, costSheetPlanId]);
+
+  const liveDirectBreakdown = React.useMemo(() => {
+    if (!costSheetUnit || !liveCostSheetPb) return null;
+    try {
+      return calculateCostSheet({
+        unit: costSheetUnit,
+        priceBook: liveCostSheetPb,
+        paymentPlan: liveCostSheetPlan ?? undefined,
+        discount: {
+          type: costSheetDiscountType,
+          value: Number(costSheetDiscountVal) || 0,
+        },
+      });
+    } catch {
+      return null;
+    }
+  }, [costSheetUnit, liveCostSheetPb, liveCostSheetPlan, costSheetDiscountType, costSheetDiscountVal]);
+
+  const handleOpenDirectCostSheet = (unit: Unit) => {
+    setCostSheetUnit(unit);
+    const activePb = priceBooks.find((pb) => pb.status === 'ACTIVE') ?? priceBooks[0];
+    setCostSheetPbId(activePb?.id ?? '');
+    const activePlan = paymentPlans.find((p) => p.isActive) ?? paymentPlans[0];
+    setCostSheetPlanId(activePlan?.id ?? '');
+
+    if (unit.heldForLeadId) {
+      const heldLead = customerLeads.find((l) => l.id === unit.heldForLeadId);
+      if (heldLead) {
+        setCostSheetLeadId(heldLead.id);
+        setCostSheetCustName(heldLead.customerName);
+        setCostSheetCustPhone(heldLead.phone);
+        setCostSheetCustEmail(heldLead.email ?? '');
+        setShowInlineNewCustomer(false);
+      } else {
+        setCostSheetLeadId('NEW');
+        setCostSheetCustName('');
+        setCostSheetCustPhone('');
+        setCostSheetCustEmail('');
+        setShowInlineNewCustomer(false);
+      }
+    } else {
+      setCostSheetLeadId('NEW');
+      setCostSheetCustName('');
+      setCostSheetCustPhone('');
+      setCostSheetCustEmail('');
+      setShowInlineNewCustomer(false);
+    }
+
+    setCostSheetDiscountType('NONE');
+    setCostSheetDiscountVal('0');
+    setCostSheetSuccessNotice(null);
+    setCostSheetModalOpen(true);
+  };
+
+  const handleSelectCostSheetCustomer = (leadId: string) => {
+    setCostSheetLeadId(leadId);
+    if (leadId === 'NEW') {
+      setShowInlineNewCustomer(true);
+      setCostSheetCustName('');
+      setCostSheetCustPhone('');
+      setCostSheetCustEmail('');
+    } else {
+      setShowInlineNewCustomer(false);
+      const lead = customerLeads.find((l) => l.id === leadId);
+      if (lead) {
+        setCostSheetCustName(lead.customerName);
+        setCostSheetCustPhone(lead.phone);
+        setCostSheetCustEmail(lead.email ?? '');
+      }
+    }
+  };
+
+  const handleGenerateCostSheet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrgId || !currentProjectId || !costSheetUnit || !liveCostSheetPb) return;
+    if (costSheetLeadId === 'NEW' && (!costSheetCustName.trim() || !costSheetCustPhone.trim())) {
+      setBannerMsg('Customer name and phone number are required.');
+      return;
+    }
+
+    setCostSheetGenerating(true);
+    setCostSheetSuccessNotice(null);
+    try {
+      let finalLeadId = costSheetLeadId !== 'NEW' ? costSheetLeadId : undefined;
+      if (!finalLeadId) {
+        const leadRes = await callBackendFunction<any, { lead: Lead }>('ingestLead', {
+          orgId: activeOrgId,
+          projectId: currentProjectId,
+          customerName: costSheetCustName.trim(),
+          phone: costSheetCustPhone.trim(),
+          email: costSheetCustEmail.trim() || undefined,
+          source: 'MANUAL',
+          isCustomer: true,
+          whatsappOptIn: true,
+        });
+        finalLeadId = leadRes.lead.id;
+      }
+
+      const res = await callBackendFunction<any, { quotation: Quotation; pdfBase64: string }>('createQuotation', {
+        orgId: activeOrgId,
+        projectId: currentProjectId,
+        unitId: costSheetUnit.id,
+        priceBookId: liveCostSheetPb.id,
+        paymentPlanId: liveCostSheetPlan?.id ?? 'default',
+        customer: {
+          name: costSheetCustName.trim(),
+          phone: costSheetCustPhone.trim(),
+          email: costSheetCustEmail.trim() || undefined,
+        },
+        leadId: finalLeadId,
+        discount: {
+          type: costSheetDiscountType,
+          value: Number(costSheetDiscountVal) || 0,
+        },
+        validDays: 15,
+        termsAndConditions:
+          '1. Quotation valid for 15 days subject to availability. 2. Cheques/RTGS in favour of Builder Escrow Account. 3. Stamp duty & registration extra at actuals.',
+        selectedParkingSlotIds: [],
+        parkingSlotsCount: costSheetUnit.parkingEntitlementCount || 1,
+        parkingTypeUsed: 'STANDARD',
+      });
+
+      // Browser trigger download
+      const byteCharacters = atob(res.pdfBase64);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'application/pdf' });
+      const blobUrl = URL.createObjectURL(blob);
+      const downloadLink = document.createElement('a');
+      downloadLink.href = blobUrl;
+      downloadLink.download = `${res.quotation.quotationNumber}.pdf`;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      URL.revokeObjectURL(blobUrl);
+
+      setCostSheetSuccessNotice(
+        `Generated & downloaded ${res.quotation.quotationNumber}.pdf (${formatInr(res.quotation.totalPayableInr)}) successfully!`
+      );
+    } catch (err) {
+      setBannerMsg(err instanceof Error ? err.message : 'Failed to generate quotation PDF.');
+    } finally {
+      setCostSheetGenerating(false);
+    }
+  };
 
   // Subscribe to audit history when a unit drawer is opened
   React.useEffect(() => {
@@ -790,6 +1023,15 @@ export function ProjectsAndInventoryPage() {
                   <Plus className="h-4 w-4" />
                   Add Unit / Plot
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setPriceLogModalOpen(true)}
+                >
+                  <TrendingUp className="h-4 w-4 text-primary" />
+                  Price Log ({priceRevisions.length})
+                </Button>
               </PermissionGate>
             )}
           </>
@@ -1200,6 +1442,48 @@ export function ProjectsAndInventoryPage() {
                     )}
                   </div>
                 </div>
+
+                {/* Unit Price Log & Revision History */}
+                <div className="sm:col-span-3 space-y-2 rounded-lg border border-border bg-muted/20 p-3 mt-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                      Price History & Revision Log
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {unitPriceRevisions.length} revision{unitPriceRevisions.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  {unitPriceRevisions.length === 0 ? (
+                    <div className="text-[11px] text-muted-foreground">
+                      Initial baseline rate: <span className="font-semibold text-foreground">{formatInr(selectedUnit.baseRatePerSqft)}/sq.ft.</span> ({formatInr(selectedUnit.calculatedTotalPrice)})
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                      {unitPriceRevisions.map((rev) => (
+                        <div key={rev.id} className="rounded border border-border/70 bg-background/90 p-2 text-xs space-y-1">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-semibold text-foreground">
+                              v{rev.priceBookVersion} • {new Date(rev.createdAt).toLocaleDateString()}
+                            </span>
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${rev.changeAmount >= 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800'}`}>
+                              {rev.changeAmount >= 0 ? '+' : ''}{formatInr(rev.changeAmount)} ({rev.changePct}%)
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-muted-foreground flex items-center justify-between">
+                            <span>Base Rate: {formatInr(rev.oldBaseRate)} → <strong className="text-foreground">{formatInr(rev.newBaseRate)}/sq.ft.</strong></span>
+                            <span>Total: <strong className="text-foreground">{formatInr(rev.newTotalValue)}</strong></span>
+                          </div>
+                          {rev.reason && (
+                            <div className="text-[10px] text-muted-foreground italic truncate">
+                              Note: {rev.reason}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Status Workflow Actions */}
@@ -1343,9 +1627,7 @@ export function ProjectsAndInventoryPage() {
                   <Button
                     size="sm"
                     onClick={() => {
-                      const uid = selectedUnit.id;
-                      setSelectedUnit(null);
-                      navigate(`/app/pricing?tab=quotations&unitId=${uid}`);
+                      handleOpenDirectCostSheet(selectedUnit);
                     }}
                   >
                     <Calculator className="h-3.5 w-3.5" />
@@ -2061,6 +2343,314 @@ export function ProjectsAndInventoryPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Direct Cost Sheet & PDF Generator Dialog */}
+      <Dialog open={costSheetModalOpen} onOpenChange={setCostSheetModalOpen}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Calculator className="h-5 w-5 text-primary" />
+              Generate Cost Sheet — {costSheetUnit?.unitNumber}
+            </DialogTitle>
+            <DialogDescription>
+              {costSheetUnit && (
+                <span>
+                  {costSheetUnit.bhk} • {costSheetUnit.unitType} • {formatAreaSqft(costSheetUnit.saleableAreaSqft)} (Carpet: {formatAreaSqft(costSheetUnit.carpetAreaSqft)}) • Base Rate: {formatInr(costSheetUnit.baseRatePerSqft)}/sq.ft.
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleGenerateCostSheet} className="space-y-4">
+            {/* Customer Selection Section */}
+            <div className="space-y-3 rounded-lg border border-border p-3.5 bg-muted/20">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <Users className="h-3.5 w-3.5 text-primary" />
+                  Customer for Quotation *
+                </Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs text-primary font-medium hover:bg-primary/10 gap-1 px-1.5"
+                  onClick={() => {
+                    setShowInlineNewCustomer(true);
+                    setCostSheetLeadId('NEW');
+                    setCostSheetCustName('');
+                    setCostSheetCustPhone('');
+                    setCostSheetCustEmail('');
+                  }}
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  + Add New Customer
+                </Button>
+              </div>
+
+              <Select value={costSheetLeadId} onValueChange={handleSelectCostSheetCustomer}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select existing customer or prospect" />
+                </SelectTrigger>
+                <SelectContent className="max-h-56">
+                  <SelectItem value="NEW">+ Register / Add New Customer</SelectItem>
+                  {customerLeads.map((lead) => (
+                    <SelectItem key={lead.id} value={lead.id}>
+                      {lead.isCustomer ? '⭐ [Customer]' : '[Prospect]'} {lead.customerName} ({lead.phone})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              {/* Inline Customer Registration fields when NEW or + Add Customer clicked */}
+              {(costSheetLeadId === 'NEW' || showInlineNewCustomer) && (
+                <div className="grid gap-2.5 sm:grid-cols-3 pt-1 border-t border-border/60">
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Customer Name *</Label>
+                    <Input
+                      required
+                      placeholder="e.g. Suresh Patel"
+                      value={costSheetCustName}
+                      onChange={(e) => setCostSheetCustName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Phone Number *</Label>
+                    <Input
+                      required
+                      placeholder="+91 9988776655"
+                      value={costSheetCustPhone}
+                      onChange={(e) => setCostSheetCustPhone(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[11px]">Email (optional)</Label>
+                    <Input
+                      type="email"
+                      placeholder="client@example.com"
+                      value={costSheetCustEmail}
+                      onChange={(e) => setCostSheetCustEmail(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Price Book & Payment Plan Selection */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Pricing Plan / Price Book</Label>
+                <Select value={costSheetPbId} onValueChange={setCostSheetPbId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select price book" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {priceBooks.map((pb) => (
+                      <SelectItem key={pb.id} value={pb.id}>
+                        {pb.name} (v{pb.versionNumber}) — {formatInr(pb.basePricePerSqft)}/sq.ft. {pb.status === 'ACTIVE' ? '• Active' : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
+                <Label className="text-xs">Payment Plan Schedule</Label>
+                <Select value={costSheetPlanId} onValueChange={setCostSheetPlanId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select payment plan" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paymentPlans.map((pp) => (
+                      <SelectItem key={pp.id} value={pp.id}>
+                        {pp.name} ({pp.milestones.length} milestones)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Negotiated Discount (Optional) */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Discount Option</Label>
+                <Select
+                  value={costSheetDiscountType}
+                  onValueChange={(val: any) => setCostSheetDiscountType(val)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NONE">No Discount</SelectItem>
+                    <SelectItem value="PER_SQFT">Discount Per Sq.Ft. (INR)</SelectItem>
+                    <SelectItem value="FIXED_INR">Lump-sum Amount (INR)</SelectItem>
+                    <SelectItem value="PERCENTAGE_OF_BASE">Percentage of Base (%)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {costSheetDiscountType !== 'NONE' && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Discount Value</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={costSheetDiscountVal}
+                    onChange={(e) => setCostSheetDiscountVal(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Live Cost Calculation Summary (Strictly without multiplication formulas) */}
+            {liveDirectBreakdown && costSheetUnit && (
+              <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-3.5">
+                <div className="text-xs font-semibold text-foreground flex items-center justify-between">
+                  <span>Cost Sheet Breakdown Preview</span>
+                  <span className="text-primary font-mono text-[11px]">
+                    Net Rate: {formatInr(Math.round(liveDirectBreakdown.totalPayableInr / costSheetUnit.saleableAreaSqft))}/sq.ft.
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 pt-1">
+                  <div className="rounded bg-background p-2 border border-border">
+                    <span className="text-[10px] text-muted-foreground block">Agreement Value</span>
+                    <span className="font-bold text-foreground">
+                      {formatInr(liveDirectBreakdown.netAgreementValueBeforeGstInr)}
+                    </span>
+                  </div>
+                  <div className="rounded bg-background p-2 border border-border">
+                    <span className="text-[10px] text-muted-foreground block">Amenities & Infra</span>
+                    <span className="font-bold text-foreground">
+                      {formatInr(liveDirectBreakdown.otherServiceChargesBeforeGstInr)}
+                    </span>
+                  </div>
+                  <div className="rounded bg-background p-2 border border-border">
+                    <span className="text-[10px] text-muted-foreground block">Applicable GST / Taxes</span>
+                    <span className="font-bold text-foreground">
+                      {formatInr(liveDirectBreakdown.totalGstInr)}
+                    </span>
+                  </div>
+                  <div className="rounded bg-primary/10 p-2 border border-primary/30">
+                    <span className="text-[10px] text-primary block font-medium">All-Inclusive Total</span>
+                    <span className="font-bold text-primary text-sm">
+                      {formatInr(liveDirectBreakdown.totalPayableInr)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {costSheetSuccessNotice && (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+                <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                <span>{costSheetSuccessNotice}</span>
+              </div>
+            )}
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-2">
+              <Button type="button" variant="outline" onClick={() => setCostSheetModalOpen(false)}>
+                Close
+              </Button>
+              <Button
+                type="submit"
+                disabled={costSheetGenerating}
+                className="gap-2 bg-primary text-primary-foreground font-semibold"
+              >
+                <Download className="h-4 w-4" />
+                {costSheetGenerating ? 'Generating PDF...' : 'Generate & Download Cost Sheet PDF'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Project Price Revision Log Dialog */}
+      <Dialog open={priceLogModalOpen} onOpenChange={setPriceLogModalOpen}>
+        <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-primary" />
+              Project Price Revision & History Log ({priceRevisions.length})
+            </DialogTitle>
+            <DialogDescription>
+              Chronological log of all pricing updates applied to units in this project.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              placeholder="Search by unit number or reason..."
+              value={priceLogSearch}
+              onChange={(e) => setPriceLogSearch(e.target.value)}
+              className="max-w-xs"
+            />
+            <div className="rounded-lg border border-border overflow-hidden max-h-[60vh] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50 border-b border-border text-left font-semibold text-muted-foreground sticky top-0">
+                  <tr>
+                    <th className="p-2.5">Unit #</th>
+                    <th className="p-2.5">Date & Time</th>
+                    <th className="p-2.5">Version</th>
+                    <th className="p-2.5">Rate / sq.ft.</th>
+                    <th className="p-2.5">Consideration</th>
+                    <th className="p-2.5">Change (Delta)</th>
+                    <th className="p-2.5">Reason</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {priceRevisions
+                    .filter((rev) => {
+                      if (!priceLogSearch.trim()) return true;
+                      const q = priceLogSearch.toLowerCase();
+                      return (
+                        (rev.unitNumber || '').toLowerCase().includes(q) ||
+                        (rev.reason && rev.reason.toLowerCase().includes(q))
+                      );
+                    })
+                    .map((rev) => (
+                      <tr key={rev.id} className="hover:bg-muted/20">
+                        <td className="p-2.5 font-bold text-foreground">{rev.unitNumber}</td>
+                        <td className="p-2.5 text-muted-foreground">{new Date(rev.createdAt).toLocaleString()}</td>
+                        <td className="p-2.5">
+                          <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium text-[10px]">
+                            v{rev.priceBookVersion}
+                          </span>
+                        </td>
+                        <td className="p-2.5 font-mono">
+                          {formatInr(rev.oldBaseRate)} → <span className="font-semibold text-foreground">{formatInr(rev.newBaseRate)}</span>
+                        </td>
+                        <td className="p-2.5 font-mono">
+                          {formatInr(rev.oldTotalValue)} → <span className="font-semibold text-foreground">{formatInr(rev.newTotalValue)}</span>
+                        </td>
+                        <td className="p-2.5">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${rev.changeAmount >= 0 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800'}`}>
+                            {rev.changeAmount >= 0 ? '+' : ''}{formatInr(rev.changeAmount)} ({rev.changePct}%)
+                          </span>
+                        </td>
+                        <td className="p-2.5 text-muted-foreground italic text-[11px] max-w-[200px] truncate">
+                          {rev.reason || 'Price update'}
+                        </td>
+                      </tr>
+                    ))}
+                  {priceRevisions.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-6 text-center text-muted-foreground">
+                        No price revisions recorded for this project yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPriceLogModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

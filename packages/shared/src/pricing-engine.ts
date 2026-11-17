@@ -836,13 +836,19 @@ export function computeSftRateBreakup(
   };
 }
 
+export interface FormattedLineItemCalculation {
+  rateLabel: string;
+  calculationText: string;
+  areaOrQuantity: string;
+}
+
 export function formatLineItemCalculation(
   item: ComputedLineItem,
   saleableAreaSqft: number,
   carpetAreaSqft: number,
   currencyCode = 'INR',
   currencySymbolOverride?: string
-): { rateLabel: string; calculationText: string } {
+): FormattedLineItemCalculation {
   const sym = currencySymbolOverride ?? getCurrencyConfig(currencyCode).symbol;
   const fmt = (n: number) => `${sym}${Math.round(n).toLocaleString('en-IN')}`;
   const areaFmt = (n: number) => Math.round(n).toLocaleString('en-IN');
@@ -851,12 +857,14 @@ export function formatLineItemCalculation(
     case 'base_price':
       return {
         rateLabel: `${fmt(item.rateOrInput)}/sq.ft.`,
-        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × ${fmt(item.rateOrInput)}/sq.ft.`,
+        areaOrQuantity: `${areaFmt(saleableAreaSqft)} sq.ft.`,
+        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. @ ${fmt(item.rateOrInput)}/sq.ft.`,
       };
     case 'floor_rise':
       return {
         rateLabel: `+${fmt(item.rateOrInput)}/sq.ft.`,
-        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × +${fmt(item.rateOrInput)}/sq.ft.`,
+        areaOrQuantity: `${areaFmt(saleableAreaSqft)} sq.ft.`,
+        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. @ +${fmt(item.rateOrInput)}/sq.ft.`,
       };
     case 'facing_premium':
     case 'view_premium':
@@ -864,41 +872,48 @@ export function formatLineItemCalculation(
     case 'location_premium':
       return {
         rateLabel: `+${fmt(item.rateOrInput)}/sq.ft.`,
-        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × +${fmt(item.rateOrInput)}/sq.ft.`,
+        areaOrQuantity: `${areaFmt(saleableAreaSqft)} sq.ft.`,
+        calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. @ +${fmt(item.rateOrInput)}/sq.ft.`,
       };
     case 'parking_charges':
       return {
-        rateLabel: item.baseAmountInr > 0 ? 'Allotted Bays' : 'Included',
+        rateLabel: item.baseAmountInr > 0 ? fmt(item.baseAmountInr) : 'Included',
+        areaOrQuantity: item.baseAmountInr > 0 ? 'Reserved Bay' : 'Entitled Bay',
         calculationText:
-          item.baseAmountInr > 0 ? 'Dedicated reserved bay(s)' : 'Included in entitlement',
+          item.baseAmountInr > 0 ? 'Dedicated reserved bay' : 'Included in entitlement',
       };
     default:
       if (item.basis === 'PER_SQFT_SALEABLE' || item.basis === 'PER_PRIMARY_AREA') {
         return {
           rateLabel: `${fmt(item.rateOrInput)}/sq.ft.`,
-          calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. × ${fmt(item.rateOrInput)}/sq.ft.`,
+          areaOrQuantity: `${areaFmt(saleableAreaSqft)} sq.ft.`,
+          calculationText: `${areaFmt(saleableAreaSqft)} sq.ft. @ ${fmt(item.rateOrInput)}/sq.ft.`,
         };
       }
       if (item.basis === 'PER_SQFT_CARPET' || item.basis === 'PER_SECONDARY_AREA') {
         return {
           rateLabel: `${fmt(item.rateOrInput)}/sq.ft. (carpet)`,
-          calculationText: `${areaFmt(carpetAreaSqft)} sq.ft. carpet × ${fmt(item.rateOrInput)}/sq.ft.`,
+          areaOrQuantity: `${areaFmt(carpetAreaSqft)} sq.ft.`,
+          calculationText: `${areaFmt(carpetAreaSqft)} sq.ft. @ ${fmt(item.rateOrInput)}/sq.ft.`,
         };
       }
       if (item.basis === 'PERCENTAGE_OF_BASE') {
         return {
           rateLabel: `${item.rateOrInput}% of Base`,
+          areaOrQuantity: 'Base Consideration',
           calculationText: `${item.rateOrInput}% on Base Consideration`,
         };
       }
       if (item.basis === 'FIXED_AMOUNT') {
         return {
-          rateLabel: 'Fixed Lump-sum',
+          rateLabel: fmt(item.baseAmountInr),
+          areaOrQuantity: 'Fixed Charge',
           calculationText: 'Standard fixed charge',
         };
       }
       return {
         rateLabel: item.rateOrInput ? `${fmt(item.rateOrInput)}` : 'Fixed',
+        areaOrQuantity: 'Fixed Charge',
         calculationText: 'Standard rate calculation',
       };
   }

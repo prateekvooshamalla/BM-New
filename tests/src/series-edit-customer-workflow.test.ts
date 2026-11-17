@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PDFDocument } from 'pdf-lib';
 import {
   createUnitService,
   updateUnitService,
@@ -8,6 +9,8 @@ import {
 import { createOrganizationService } from '../../functions/src/organizations';
 import { createProjectService, createTowerService } from '../../functions/src/projects';
 import { ingestLeadService, convertLeadToCustomerService } from '../../functions/src/leads';
+import { savePriceBookDraftService, activatePriceBookService } from '../../functions/src/pricing';
+import { createQuotationService, createPaymentPlanService } from '../../functions/src/quotations';
 import { createTransactionalTestFirestore } from './helpers/in-memory-firestore';
 import type { AuthenticatedActor } from '../../functions/src/shared/auth-guard';
 
@@ -439,5 +442,143 @@ describe('Flat Series Number, Edit Options & Customer Conversion Workflow', () =
         floorNumber: 8,
       })
     ).rejects.toThrow(/exceeds tower "Tower Beta 5 Floors" total floors \(5\)/);
+  });
+
+  it('updates inventory pricing when price is updated in pricing section, logs price history revisions, and generates elegant cost sheet PDF', async () => {
+    const { db, org, project, tower } = await setupProjectFixture();
+
+    // 1. Create a unit in inventory
+    const unit101 = await createUnitService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      towerId: tower.id,
+      towerName: tower.name,
+      floorNumber: 3,
+      series: '01',
+      unitNumber: 'TA-301',
+      unitType: 'APARTMENT',
+      bhk: '3 BHK',
+      saleableAreaSqft: 1800,
+      carpetAreaSqft: 1260,
+      facing: 'EAST',
+      baseRatePerSqft: 8500,
+      isCorner: false,
+      parkingEntitlementCount: 1,
+      listingMode: 'BUY',
+    });
+
+    expect(unit101.baseRatePerSqft).toBe(8500);
+    expect(unit101.calculatedTotalPrice).toBe(1800 * 8500); // 15,300,000
+
+    // 2. Create and activate a Price Book v1 with base rate 9000 and apply to inventory
+    const savedPriceBook = await savePriceBookDraftService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      name: 'Festive Launch Price Book',
+      effectiveFrom: '2026-11-18T00:00:00.000Z',
+      basePricePerSqft: 9000,
+      floorRise: { enabled: true, startFloor: 2, ratePerFloorPerSqft: 50 },
+      parkingPricesByType: {
+        STANDARD: 300000,
+        TANDEM: 500000,
+        MECHANICAL: 250000,
+        EV: 400000,
+        ACCESSIBLE: 300000,
+      },
+      lineItems: [
+        {
+          id: 'li-amenities',
+          internalKey: 'amenities_charges',
+          displayLabel: 'Amenities Charges',
+          basis: 'FIXED_AMOUNT',
+          amount: 500000,
+          taxCategory: 'AGREEMENT_GST',
+          isOptional: false,
+          isVisible: true,
+          isRemovable: true,
+          displayOrder: 1,
+        },
+      ],
+      taxConfig: {
+        agreementGstPct: 5,
+        otherServiceGstPct: 18,
+        roundingMode: 'NEAREST_RUPEE',
+        registrationDisclaimer: 'Registration extra at actuals.',
+      },
+      applyToInventory: true,
+    });
+
+    expect(savedPriceBook.status).toBe('ACTIVE');
+    expect(savedPriceBook.basePricePerSqft).toBe(9000);
+
+    // 3. Verify unit in inventory was updated automatically
+    const updatedUnitDoc = await db.collection('units').doc(unit101.id).get();
+    const updatedUnit = updatedUnitDoc.data()!;
+    expect(updatedUnit.baseRatePerSqft).toBe(9000);
+    expect(updatedUnit.activePriceBookId).toBe(savedPriceBook.id);
+    expect(updatedUnit.calculatedTotalPrice).toBeGreaterThan(15300000);
+
+    // 4. Verify price revision history log was recorded
+    const revsSnap = await db
+      .collection('price_revisions')
+      .where('unitId', '==', unit101.id)
+      .get();
+    expect(revsSnap.size).toBe(1);
+    const rev = revsSnap.docs[0].data();
+    expect(rev.unitId).toBe(unit101.id);
+    expect(rev.unitNumber).toBe('TA-301');
+    expect(rev.oldBaseRate).toBe(8500);
+    expect(rev.newBaseRate).toBe(9000);
+    expect(rev.changeAmount).toBeGreaterThan(0);
+
+    // 5. Ingest customer and create CLP payment plan
+    const { lead: cust } = await ingestLeadService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      customerName: 'Vikramaditya Roy',
+      phone: '+919876500001',
+      source: 'MANUAL',
+      isCustomer: true,
+    });
+
+    const plan = await createPaymentPlanService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      name: 'Standard CLP 10-Step',
+      planType: 'CONSTRUCTION_LINKED',
+      milestones: [
+        { sequence: 1, name: 'Booking Advance', percentage: 20, dueTrigger: 'On Booking', taxTreatment: 'PROPORTIONAL_GST' },
+        { sequence: 2, name: 'Foundation', percentage: 40, dueTrigger: 'Foundation', taxTreatment: 'PROPORTIONAL_GST' },
+        { sequence: 3, name: 'Possession', percentage: 40, dueTrigger: 'Handover', taxTreatment: 'INCLUDE_POSSESSION_CHARGES' },
+      ],
+    });
+
+    // 6. Generate Cost Sheet & Quotation
+    const quoteRes = await createQuotationService(db, ADMIN, 'Sales Director', 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      unitId: unit101.id,
+      priceBookId: savedPriceBook.id,
+      paymentPlanId: plan.id,
+      customer: {
+        name: cust.customerName,
+        phone: cust.phone,
+      },
+      leadId: cust.id,
+      discount: { type: 'NONE', value: 0 },
+      validDays: 15,
+      termsAndConditions: '1. Quotation valid for 15 days. 2. Stamp duty extra.',
+      selectedParkingSlotIds: [],
+      parkingSlotsCount: 1,
+      parkingTypeUsed: 'STANDARD',
+    });
+
+    expect(quoteRes.quotation.status).toBe('ISSUED');
+    expect(quoteRes.quotation.customer.name).toBe('Vikramaditya Roy');
+    expect(quoteRes.pdfBytes).toBeDefined();
+
+    // Verify PDF is valid PDF Document
+    const pdfDoc = await PDFDocument.load(quoteRes.pdfBytes);
+    expect(pdfDoc.getPageCount()).toBeGreaterThanOrEqual(1);
   });
 });

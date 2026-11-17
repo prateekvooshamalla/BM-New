@@ -730,8 +730,8 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                       <thead>
                         <tr>
                           <th>Component</th>
-                          <th>Rate / Basis</th>
-                          <th>Calculation Breakup</th>
+                          <th>Rate / Cost</th>
+                          <th>SFT / Quantity</th>
                           <th>Base (INR)</th>
                           <th>GST</th>
                           <th>Total</th>
@@ -739,7 +739,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                       </thead>
                       <tbody>
                         {liveBreakdown.lineItems.map((li) => {
-                          const { rateLabel, calculationText } = formatLineItemCalculation(
+                          const { rateLabel, areaOrQuantity } = formatLineItemCalculation(
                             li,
                             selectedUnit.saleableAreaSqft,
                             selectedUnit.carpetAreaSqft
@@ -748,7 +748,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                             <tr key={li.internalKey}>
                               <td className="font-medium">{li.displayLabel}</td>
                               <td className="font-mono text-muted-foreground">{rateLabel}</td>
-                              <td className="font-mono text-muted-foreground text-[11px]">{calculationText}</td>
+                              <td className="font-mono text-muted-foreground text-[11px]">{areaOrQuantity}</td>
                               <td>{formatInr(li.baseAmountInr)}</td>
                               <td>
                                 {formatInr(li.gstAmountInr)} ({li.gstPct}%)
@@ -761,7 +761,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                           <tr className="text-emerald-700 font-semibold bg-emerald-50/40 dark:bg-emerald-950/20">
                             <td>Less: Negotiated Discount ({liveBreakdown.discountEffectivePct}%)</td>
                             <td className="font-mono">-₹{liveSftBreakup?.discountRatePerSqft.toLocaleString('en-IN')}/sq.ft.</td>
-                            <td className="font-mono text-[11px]">{selectedUnit.saleableAreaSqft.toLocaleString('en-IN')} sq.ft. × -₹{liveSftBreakup?.discountRatePerSqft.toLocaleString('en-IN')}</td>
+                            <td className="font-mono text-[11px]">{selectedUnit.saleableAreaSqft.toLocaleString('en-IN')} sq.ft.</td>
                             <td>- {formatInr(liveBreakdown.discountAmountInr)}</td>
                             <td>—</td>
                             <td>

@@ -272,17 +272,18 @@ export async function generateQuotationPdfBytes(params: {
 
   // Cost Breakdown Table Header
   const tableTitle = template?.customLabels.pricingTableTitle || 'COST COMPONENT';
-  page.drawRectangle({ x: 36, y: y - 4, width: 523, height: 18, color: rgb(0.94, 0.95, 0.97) });
+  page.drawRectangle({ x: 36, y: y - 4, width: 523, height: 18, color: rgb(0.92, 0.94, 0.97) });
   page.drawText(tableTitle.toUpperCase().slice(0, 22), { x: 42, y: y + 1, size: 7.5, font: fontBold });
-  page.drawText('RATE / BASIS', { x: 175, y: y + 1, size: 7.5, font: fontBold });
-  page.drawText('CALCULATION BREAKUP', { x: 250, y: y + 1, size: 7.5, font: fontBold });
-  page.drawText('BASE AMOUNT', { x: 385, y: y + 1, size: 7.5, font: fontBold });
-  page.drawText(taxHeaderLabel.slice(0, 8), { x: 450, y: y + 1, size: 7.5, font: fontBold });
-  page.drawText('TOTAL', { x: 505, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('RATE / COST', { x: 175, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('SFT / QUANTITY', { x: 265, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('BASE AMOUNT', { x: 360, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText(taxHeaderLabel.slice(0, 8), { x: 440, y: y + 1, size: 7.5, font: fontBold });
+  page.drawText('TOTAL AMOUNT', { x: 500, y: y + 1, size: 7.5, font: fontBold });
   y -= 18;
 
+  let rowIndex = 0;
   for (const li of quotation.breakdown.lineItems) {
-    const { rateLabel, calculationText } = formatLineItemCalculation(
+    const { rateLabel, areaOrQuantity } = formatLineItemCalculation(
       li,
       unit.saleableAreaSqft,
       unit.carpetAreaSqft,
@@ -291,21 +292,32 @@ export async function generateQuotationPdfBytes(params: {
     );
 
     ensureSpace(16);
+    if (rowIndex % 2 === 1) {
+      page.drawRectangle({
+        x: 36,
+        y: y - 3,
+        width: 523,
+        height: 15,
+        color: rgb(0.985, 0.99, 1),
+      });
+    }
+
     page.drawText(li.displayLabel.slice(0, 26), { x: 42, y, size: 7.5, font: fontRegular });
-    page.drawText(rateLabel.slice(0, 16), { x: 175, y, size: 7.2, font: fontRegular, color: rgb(0.25, 0.3, 0.35) });
-    page.drawText(calculationText.slice(0, 30), { x: 250, y, size: 7.2, font: fontRegular, color: rgb(0.25, 0.3, 0.35) });
-    page.drawText(fmtMoney(li.baseAmountInr), { x: 385, y, size: 7.5, font: fontRegular });
+    page.drawText(rateLabel.slice(0, 18), { x: 175, y, size: 7.2, font: fontRegular, color: rgb(0.25, 0.3, 0.35) });
+    page.drawText(areaOrQuantity.slice(0, 18), { x: 265, y, size: 7.2, font: fontRegular, color: rgb(0.25, 0.3, 0.35) });
+    page.drawText(fmtMoney(li.baseAmountInr), { x: 360, y, size: 7.5, font: fontRegular });
     page.drawText(
-      toggles.showTaxBreakdown ? `${fmtMoney(li.gstAmountInr)} (${li.gstPct}%)` : '-',
+      toggles.showTaxBreakdown ? `${fmtMoney(li.gstAmountInr)} (${li.gstPct}%)` : '—',
       {
-        x: 450,
+        x: 440,
         y,
         size: 7.2,
         font: fontRegular,
       }
     );
-    page.drawText(fmtMoney(li.totalWithGstInr), { x: 505, y, size: 7.5, font: fontBold });
-    y -= 14;
+    page.drawText(fmtMoney(li.totalWithGstInr), { x: 500, y, size: 7.5, font: fontBold });
+    y -= 15;
+    rowIndex++;
   }
 
   if (quotation.breakdown.discountAmountInr > 0) {
@@ -325,9 +337,9 @@ export async function generateQuotationPdfBytes(params: {
       color: rgb(0.08, 0.5, 0.24),
     });
     page.drawText(
-      `${Math.round(unit.saleableAreaSqft)} sq.ft. × -${fmtMoney(sftBreakup.discountRatePerSqft)}`,
+      `${Math.round(unit.saleableAreaSqft)} sq.ft.`,
       {
-        x: 250,
+        x: 265,
         y,
         size: 7.2,
         font: fontBold,
@@ -335,15 +347,15 @@ export async function generateQuotationPdfBytes(params: {
       }
     );
     page.drawText(`- ${fmtMoney(quotation.breakdown.discountAmountInr)}`, {
-      x: 385,
+      x: 360,
       y,
       size: 7.8,
       font: fontBold,
       color: rgb(0.08, 0.5, 0.24),
     });
-    page.drawText('—', { x: 450, y, size: 7.5, font: fontRegular });
+    page.drawText('—', { x: 440, y, size: 7.5, font: fontRegular });
     page.drawText(`- ${fmtMoney(quotation.breakdown.discountAmountInr)}`, {
-      x: 505,
+      x: 500,
       y,
       size: 7.8,
       font: fontBold,
@@ -357,33 +369,34 @@ export async function generateQuotationPdfBytes(params: {
   const grandTotalTitle = (
     template?.customLabels.grandTotalLabel || 'TOTAL ALL-INCLUSIVE PAYABLE'
   ).toUpperCase();
-  page.drawRectangle({ x: 36, y: y - 10, width: 523, height: 26, color: rgb(0.93, 0.96, 1) });
+  page.drawRectangle({ x: 36, y: y - 10, width: 523, height: 26, color: rgb(0.08, 0.16, 0.32) });
   page.drawText(grandTotalTitle.slice(0, 26), {
-    x: 42,
+    x: 44,
     y: y - 1,
     size: 9,
     font: fontBold,
-    color: rgb(0.06, 0.15, 0.36),
+    color: rgb(1, 1, 1),
   });
   page.drawText(`Net SFT: ${fmtMoney(sftBreakup.netAllInclusiveRatePerSqft)}/${areaUnit.toLowerCase()}`, {
-    x: 205,
+    x: 215,
     y: y - 1,
     size: 8,
     font: fontBold,
-    color: rgb(0.06, 0.15, 0.36),
+    color: rgb(0.85, 0.9, 1),
   });
   page.drawText(`${taxHeaderLabel.slice(0, 10)}: ${fmtMoney(quotation.breakdown.totalGstInr)}`, {
-    x: 335,
+    x: 340,
     y: y - 1,
     size: 8,
     font: fontRegular,
+    color: rgb(0.85, 0.9, 1),
   });
   page.drawText(fmtMoney(quotation.breakdown.totalPayableInr), {
-    x: 455,
+    x: 450,
     y: y - 2,
-    size: 10,
+    size: 10.5,
     font: fontBold,
-    color: rgb(0.06, 0.15, 0.36),
+    color: rgb(1, 1, 1),
   });
   y -= 28;
 
@@ -475,6 +488,74 @@ export async function generateQuotationPdfBytes(params: {
       font: fontRegular,
       color: rgb(0.45, 0.45, 0.5),
     });
+    y -= 12;
+  }
+
+  if (toggles.showSignatureBlocks) {
+    ensureSpace(58);
+    y -= 8;
+    page.drawRectangle({
+      x: 36,
+      y: y - 44,
+      width: 250,
+      height: 44,
+      borderColor: rgb(0.82, 0.86, 0.93),
+      borderWidth: 0.75,
+      color: rgb(0.98, 0.99, 1),
+    });
+    page.drawText('AUTHORIZED BUILDER SIGNATORY', {
+      x: 44,
+      y: y - 12,
+      size: 7,
+      font: fontBold,
+      color: rgb(0.1, 0.15, 0.3),
+    });
+    page.drawText(`Prepared: ${quotation.salesRepName}`, {
+      x: 44,
+      y: y - 24,
+      size: 6.8,
+      font: fontRegular,
+      color: rgb(0.35, 0.4, 0.45),
+    });
+    page.drawText('Sign / Seal: __________________________', {
+      x: 44,
+      y: y - 36,
+      size: 6.8,
+      font: fontRegular,
+      color: rgb(0.35, 0.4, 0.45),
+    });
+
+    page.drawRectangle({
+      x: 309,
+      y: y - 44,
+      width: 250,
+      height: 44,
+      borderColor: rgb(0.82, 0.86, 0.93),
+      borderWidth: 0.75,
+      color: rgb(0.98, 0.99, 1),
+    });
+    page.drawText('CUSTOMER ACCEPTANCE', {
+      x: 317,
+      y: y - 12,
+      size: 7,
+      font: fontBold,
+      color: rgb(0.1, 0.15, 0.3),
+    });
+    page.drawText(`Client: ${quotation.customer.name}`, {
+      x: 317,
+      y: y - 24,
+      size: 6.8,
+      font: fontRegular,
+      color: rgb(0.35, 0.4, 0.45),
+    });
+    page.drawText('Customer Signature: __________________', {
+      x: 317,
+      y: y - 36,
+      size: 6.8,
+      font: fontRegular,
+      color: rgb(0.35, 0.4, 0.45),
+    });
+    y -= 50;
   }
 
   return pdfDoc.save();
@@ -577,10 +658,10 @@ export async function createQuotationService(
     );
   }
 
-  if (priceBook.status !== 'APPROVED' && priceBook.status !== 'ACTIVE') {
+  if (priceBook.status !== 'APPROVED' && priceBook.status !== 'ACTIVE' && priceBook.status !== 'DRAFT') {
     throw new HttpsError(
       'failed-precondition',
-      `Quotations require an APPROVED or ACTIVE price book (selected: ${priceBook.status}).`
+      `Quotations require an APPROVED, ACTIVE, or DRAFT price book (selected: ${priceBook.status}).`
     );
   }
 

@@ -545,6 +545,7 @@ export const upsertPriceBookSchema = z.object({
   maxDiscountPctWithoutApproval: z.coerce.number().min(0).max(100).default(2),
   defaultPaymentPlanId: z.string().nullable().optional(),
   internalNotes: z.string().max(1000).optional(),
+  applyToInventory: z.boolean().optional(),
 });
 
 export const savePricingScopeOverrideSchema = z.object({
