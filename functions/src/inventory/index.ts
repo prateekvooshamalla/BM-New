@@ -18,6 +18,7 @@ import {
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import { ensureBaselinePriceBookForProject } from '../pricing';
 
 function statusStatField(status: UnitStatus): keyof ProjectStats {
   switch (status) {
@@ -48,7 +49,7 @@ export async function createUnitService(
   }
   const nowIso = new Date().toISOString();
 
-  return db.runTransaction(async (tx) => {
+  const createdUnit = await db.runTransaction(async (tx) => {
     const projRef = db.collection('projects').doc(input.projectId);
     const projSnap = await tx.get(projRef);
     if (!projSnap.exists || projSnap.data()?.orgId !== input.orgId) {
@@ -168,6 +169,19 @@ export async function createUnitService(
 
     return unit;
   });
+
+  await ensureBaselinePriceBookForProject(db, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    baseRatePerSqft: input.baseRatePerSqft,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole,
+  }).catch(() => {
+    // Non-blocking baseline pricing initialization
+  });
+
+  return createdUnit;
 }
 
 /**
@@ -412,6 +426,19 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
         else throw error;
       }
     }
+  }
+
+  if (created > 0) {
+    await ensureBaselinePriceBookForProject(db, {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      baseRatePerSqft: input.baseRatePerSqft,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole,
+    }).catch(() => {
+      // Non-blocking baseline pricing initialization
+    });
   }
 
   return { createdCount: created, skippedCount: skipped };

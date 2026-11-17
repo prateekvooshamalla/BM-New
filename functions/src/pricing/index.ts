@@ -163,26 +163,33 @@ export async function savePriceBookDraftService(
     return updated;
   }
 
-  // Determine next version number for this project
+  // Determine next version number for this project or reuse existing unactivated draft
   const prevBooksSnap = await db
     .collection('price_books')
     .where('orgId', '==', input.orgId)
     .where('projectId', '==', input.projectId)
     .get();
 
+  const existingDraftDoc = !input.priceBookId
+    ? prevBooksSnap.docs.find((d) => (d.data() as PriceBook).status === 'DRAFT')
+    : null;
+
   const maxVersion = prevBooksSnap.docs.reduce((max, d) => {
     const v = (d.data() as PriceBook).versionNumber ?? 0;
     return v > max ? v : max;
   }, 0);
 
-  const pbRef = db.collection('price_books').doc();
+  const pbRef = existingDraftDoc ? existingDraftDoc.ref : db.collection('price_books').doc();
+  const existingDraftData = existingDraftDoc ? (existingDraftDoc.data() as PriceBook) : null;
+  const versionNumber = existingDraftData?.versionNumber ?? (maxVersion + 1);
+
   const created: PriceBook = {
     id: pbRef.id,
     orgId: input.orgId,
     projectId: input.projectId,
     name: input.name.trim(),
     description: input.description?.trim(),
-    versionNumber: maxVersion + 1,
+    versionNumber,
     parentPriceBookId: null,
     status: 'DRAFT',
     isImmutable: false,
@@ -209,10 +216,10 @@ export async function savePriceBookDraftService(
     maxDiscountPctWithoutApproval: input.maxDiscountPctWithoutApproval,
     defaultPaymentPlanId: input.defaultPaymentPlanId ?? null,
     internalNotes: input.internalNotes,
-    createdByUid: actor.uid,
+    createdByUid: existingDraftData?.createdByUid ?? actor.uid,
     approvedByUid: null,
     approvedAt: null,
-    createdAt: nowIso,
+    createdAt: existingDraftData?.createdAt ?? nowIso,
     updatedAt: nowIso,
   };
 
@@ -364,7 +371,7 @@ export async function activatePriceBookService(
   if (!canTransitionPriceBook(pb.status, 'ACTIVE')) {
     throw new HttpsError(
       'failed-precondition',
-      `Only APPROVED or SCHEDULED price books can be activated (current: ${pb.status}).`
+      `Price book in status ${pb.status} cannot be transitioned to ACTIVE.`
     );
   }
 
@@ -392,6 +399,8 @@ export async function activatePriceBookService(
     ...pb,
     status: 'ACTIVE',
     isImmutable: true,
+    approvedByUid: pb.approvedByUid ?? actor.uid,
+    approvedAt: pb.approvedAt ?? nowIso,
     updatedAt: nowIso,
   };
   batch.set(pbRef, activatedBook);
@@ -748,3 +757,162 @@ export const upsertCostSheetTemplate = onCall(async (request) => {
     parsed
   );
 });
+
+/**
+ * Automatically provisions or initializes a Version 1 Draft Price Book
+ * when towers or flats/inventory are generated for a project.
+ */
+export async function ensureBaselinePriceBookForProject(
+  db: Firestore,
+  params: {
+    orgId: string;
+    projectId: string;
+    baseRatePerSqft: number;
+    actorUid: string;
+    actorEmail?: string;
+    actorRole?: string;
+  }
+): Promise<PriceBook | null> {
+  if (!params.orgId || !params.projectId) return null;
+
+  // Check if any price book already exists for this project
+  const existingBooksSnap = await db
+    .collection('price_books')
+    .where('orgId', '==', params.orgId)
+    .where('projectId', '==', params.projectId)
+    .get();
+
+  const nowIso = new Date().toISOString();
+  const effectiveDate = nowIso.slice(0, 10);
+
+  // If there's an ACTIVE book, leave it untouched
+  const activeBook = existingBooksSnap.docs.find((d) => (d.data() as PriceBook).status === 'ACTIVE');
+  if (activeBook) {
+    return activeBook.data() as PriceBook;
+  }
+
+  // If there's an existing DRAFT book, ensure its base rate reflects inventory if it was not customized
+  const draftBookDoc = existingBooksSnap.docs.find((d) => (d.data() as PriceBook).status === 'DRAFT');
+  if (draftBookDoc) {
+    const draftBook = draftBookDoc.data() as PriceBook;
+    if (params.baseRatePerSqft > 0 && draftBook.basePricePerSqft !== params.baseRatePerSqft) {
+      await draftBookDoc.ref.update({
+        basePricePerSqft: params.baseRatePerSqft,
+        updatedAt: nowIso,
+      });
+      return { ...draftBook, basePricePerSqft: params.baseRatePerSqft, updatedAt: nowIso };
+    }
+    return draftBook;
+  }
+
+  // Fetch project to align currency and area unit
+  const projSnap = await db.collection('projects').doc(params.projectId).get();
+  const projData = projSnap.data();
+  const currencyCode = projData?.currencyCode ?? 'INR';
+  const areaUnit = projData?.areaUnit ?? 'SQFT';
+
+  const rate =
+    params.baseRatePerSqft > 0
+      ? params.baseRatePerSqft
+      : typeof projData?.startingPriceInr === 'number' && projData.startingPriceInr > 0
+        ? Math.round(projData.startingPriceInr / 1500)
+        : 8500;
+
+  const pbRef = db.collection('price_books').doc();
+  const initialPriceBook: PriceBook = {
+    id: pbRef.id,
+    orgId: params.orgId,
+    projectId: params.projectId,
+    name: 'Launch Price Book (v1)',
+    description: 'Auto-generated Version 1 pricing baseline from project inventory setup.',
+    versionNumber: 1,
+    parentPriceBookId: null,
+    status: 'DRAFT',
+    isImmutable: false,
+    effectiveFrom: effectiveDate,
+    expiresAt: null,
+    currencyCode,
+    areaUnit,
+    pricingMode: 'PER_AREA',
+    basePricePerSqft: rate,
+    floorRise: {
+      enabled: true,
+      startFloor: 2,
+      ratePerFloorPerSqft: 50,
+    },
+    facingPremiumPerSqft: {
+      EAST: 150,
+      NORTH: 100,
+      NORTH_EAST: 150,
+    },
+    viewPremiumPerSqft: {
+      CENTRAL_PARK: 125,
+    },
+    cornerPremiumPerSqft: 100,
+    locationPremiumPerSqft: 0,
+    unitSpecificPremiumInr: {},
+    parkingPricesByType: {
+      STANDARD: 450000,
+      TANDEM: 750000,
+      MECHANICAL: 450000,
+      EV: 550000,
+      ACCESSIBLE: 450000,
+    },
+    lineItems: structuredClone(DEFAULT_LINE_ITEMS_TEMPLATE),
+    taxConfig: {
+      agreementGstPct: 5,
+      otherServiceGstPct: 18,
+      roundingMode: 'NEAREST_RUPEE',
+      registrationDisclaimer:
+        'Stamp duty & registration charges are payable at actuals as per prevailing Government norms.',
+    },
+    maxDiscountPctWithoutApproval: 2.5,
+    defaultPaymentPlanId: null,
+    internalNotes: 'Auto-generated Version 1 draft price book on inventory generation.',
+    createdByUid: params.actorUid,
+    approvedByUid: null,
+    approvedAt: null,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  await pbRef.set(initialPriceBook);
+
+  await writeAuditEvent(db, {
+    orgId: params.orgId,
+    actorUid: params.actorUid,
+    actorEmail: params.actorEmail ?? 'system@bharatmakaan.com',
+    actorRole: params.actorRole ?? 'SYSTEM',
+    action: 'PRICE_BOOK_DRAFT_CREATED',
+    category: 'PRICING',
+    entityType: 'price_book',
+    entityId: initialPriceBook.id,
+    summary: `Auto-generated Version 1 draft price book "${initialPriceBook.name}" (Base: ${rate}/sq.ft.).`,
+  });
+
+  return initialPriceBook;
+}
+
+export const ensureBaselinePriceBook = onCall(async (request) => {
+  const schema = z.object({
+    orgId: z.string().min(1),
+    projectId: z.string().min(1),
+    baseRatePerSqft: z.coerce.number().nonnegative().default(0),
+  });
+  const input = schema.parse(request.data);
+  const { actor, member } = await requireOrgPermission(
+    request,
+    input.orgId,
+    'pricing:view',
+    input.projectId
+  );
+  return ensureBaselinePriceBookForProject(adminDb, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    baseRatePerSqft: input.baseRatePerSqft,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole: member?.role ?? 'PLATFORM_SUPER_ADMIN',
+  });
+});
+

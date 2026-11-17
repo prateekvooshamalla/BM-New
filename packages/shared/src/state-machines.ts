@@ -130,7 +130,7 @@ export function validateUnitTransition(
 }
 
 export const ALLOWED_PRICE_BOOK_TRANSITIONS: Record<PriceBookStatus, PriceBookStatus[]> = {
-  DRAFT: ['PENDING_APPROVAL', 'ARCHIVED'],
+  DRAFT: ['PENDING_APPROVAL', 'APPROVED', 'ACTIVE', 'ARCHIVED'],
   PENDING_APPROVAL: ['APPROVED', 'REJECTED', 'DRAFT'],
   REJECTED: ['DRAFT', 'ARCHIVED'],
   APPROVED: ['SCHEDULED', 'ACTIVE', 'ARCHIVED'],

@@ -270,6 +270,19 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
     };
   }, [activeOrgId, projectId]);
 
+  React.useEffect(() => {
+    if (!activeOrgId || !projectId) return;
+    if (priceBooks.length === 0 && units.length > 0 && !busy) {
+      callBackendFunction('ensureBaselinePriceBook', {
+        orgId: activeOrgId,
+        projectId,
+        baseRatePerSqft: units[0].baseRatePerSqft || 8500,
+      }).catch(() => {
+        // Non-blocking sync
+      });
+    }
+  }, [activeOrgId, projectId, priceBooks.length, units.length, busy]);
+
   const selectedBook = priceBooks.find((b) => b.id === selectedBookId) ?? priceBooks[0] ?? null;
 
   const openDraftEditor = (existing?: PriceBook) => {
@@ -591,14 +604,28 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
                           Edit Draft
                         </Button>
                         {pb.status === 'DRAFT' && (
-                          <Button
-                            size="sm"
-                            disabled={busy}
-                            onClick={() => handleSubmitForApproval(pb)}
-                          >
-                            <Send className="h-3 w-3" />
-                            Submit Approval
-                          </Button>
+                          <>
+                            <PermissionGate permission="pricing:activate" projectId={projectId}>
+                              <Button
+                                size="sm"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+                                disabled={busy}
+                                onClick={() => handleActivate(pb)}
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                                Activate Version 1
+                              </Button>
+                            </PermissionGate>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleSubmitForApproval(pb)}
+                            >
+                              <Send className="h-3 w-3" />
+                              Submit Approval
+                            </Button>
+                          </>
                         )}
                       </>
                     ) : (
@@ -644,6 +671,37 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  {selectedBook.status === 'DRAFT' && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50/70 p-3 text-xs text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="h-4 w-4 text-amber-600 flex-shrink-0" />
+                        <div>
+                          <span className="font-semibold">Version 1 Draft Baseline Ready:</span> Initialized from project inventory. Activate now to publish and apply this pricing across all unbooked units.
+                        </div>
+                      </div>
+                      <PermissionGate permission="pricing:activate" projectId={projectId}>
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 whitespace-nowrap self-start sm:self-auto"
+                          disabled={busy}
+                          onClick={() => handleActivate(selectedBook)}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                          Activate Version 1 Now
+                        </Button>
+                      </PermissionGate>
+                    </div>
+                  )}
+
+                  {selectedBook.status === 'ACTIVE' && (
+                    <div className="flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50/70 p-3 text-xs text-emerald-950 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-200">
+                      <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                      <div>
+                        <span className="font-semibold">Active Production Pricing (v{selectedBook.versionNumber}):</span> All unbooked inventory units, visual pricing elevation cards, and official cost sheet quotations are actively synchronized with this price book.
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid gap-3 sm:grid-cols-4 text-xs">
                     <div className="rounded-md border border-border p-2.5">
                       <span className="text-muted-foreground">Base Rate</span>

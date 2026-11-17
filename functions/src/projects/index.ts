@@ -26,6 +26,7 @@ import {
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { writeAuditEvent } from '../audit';
+import { ensureBaselinePriceBookForProject } from '../pricing';
 
 function defaultTemplateForProjectType(projectType: ProjectType): ProjectStructureTemplateKey {
   switch (projectType) {
@@ -310,7 +311,7 @@ export async function createTowerService(
   const input = createTowerSchema.parse(rawInput);
   const nowIso = new Date().toISOString();
 
-  return db.runTransaction(async (tx) => {
+  const createdTower = await db.runTransaction(async (tx) => {
     const projRef = db.collection('projects').doc(input.projectId);
     const projSnap = await tx.get(projRef);
     if (!projSnap.exists || projSnap.data()?.orgId !== input.orgId) {
@@ -359,6 +360,19 @@ export async function createTowerService(
 
     return tower;
   });
+
+  await ensureBaselinePriceBookForProject(db, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    baseRatePerSqft: 0,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    actorRole,
+  }).catch(() => {
+    // Non-blocking baseline pricing initialization
+  });
+
+  return createdTower;
 }
 
 export async function createFloorService(

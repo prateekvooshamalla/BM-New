@@ -1011,9 +1011,18 @@ export function ProjectsAndInventoryPage() {
                   </div>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Calculated Price:</span>
-                  <div className="font-bold text-primary text-sm">
+                  <span className="text-muted-foreground">Calculated Consideration:</span>
+                  <div className="font-bold text-primary text-sm flex items-center gap-1.5 flex-wrap">
                     {formatInr(selectedUnit.calculatedTotalPrice)}
+                    {selectedUnit.activePriceBookId ? (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                        Active Pricing
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                        Draft Baseline Only
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
