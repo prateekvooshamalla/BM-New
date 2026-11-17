@@ -292,6 +292,7 @@ export interface Unit {
   towerName?: string;
   floorId?: string | null;
   floorNumber: number; // 0 for plots/villas without apartment floors
+  series?: string; // Unique flat series per floor in a tower/project (e.g., "01", "02", "1", "A")
   unitNumber: string;
   unitType: UnitType;
   inventorySource?: InventorySource;
@@ -838,6 +839,9 @@ export interface Lead {
   partnerAgentUid?: string | null;
   protectionExpiresAt?: ISODateString | null;
   stage: LeadStage;
+  isCustomer?: boolean; // Converted to customer
+  customerConvertedAt?: ISODateString | null;
+  convertedByUid?: string | null;
   qualificationStatus: 'UNREVIEWED' | 'HOT' | 'WARM' | 'COLD' | 'DISQUALIFIED';
   lostReason?: string;
   leadScore: number;

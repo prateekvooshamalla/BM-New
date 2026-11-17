@@ -5,6 +5,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
   Building2,
   Calculator,
+  Edit,
   Filter,
   FolderPlus,
   Grid3X3,
@@ -16,6 +17,9 @@ import {
   Share2,
   Sparkles,
   Unlock,
+  UserCheck,
+  UserPlus,
+  Users,
 } from 'lucide-react';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
@@ -30,6 +34,7 @@ import {
   type Tower,
   type Unit,
   type UnitStatus,
+  type UnitType,
   type Lead,
 } from '@bharat-makaan/shared';
 import { callBackendFunction, storage } from '@/lib/firebase';
@@ -159,6 +164,7 @@ export function ProjectsAndInventoryPage() {
   // Create Unit Form
   const [unitTowerId, setUnitTowerId] = React.useState('');
   const [unitFloorNo, setUnitFloorNo] = React.useState('1');
+  const [unitSeries, setUnitSeries] = React.useState('01');
   const [unitNumber, setUnitNumber] = React.useState('');
   const [unitTypeVal, setUnitTypeVal] = React.useState<'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE'>('APARTMENT');
   const [unitBhk, setUnitBhk] = React.useState('3 BHK');
@@ -169,6 +175,30 @@ export function ProjectsAndInventoryPage() {
   const [unitParkingEntitled, setUnitParkingEntitled] = React.useState('2');
   const [unitCorner, setUnitCorner] = React.useState(false);
   const [unitPublished, setUnitPublished] = React.useState(false);
+
+  // Edit Unit Form
+  const [editUnitOpen, setEditUnitOpen] = React.useState(false);
+  const [editUnitId, setEditUnitId] = React.useState('');
+  const [editUnitNumber, setEditUnitNumber] = React.useState('');
+  const [editUnitSeries, setEditUnitSeries] = React.useState('');
+  const [editFloorNo, setEditFloorNo] = React.useState('1');
+  const [editUnitTypeVal, setEditUnitTypeVal] = React.useState<UnitType>('APARTMENT');
+  const [editBhk, setEditBhk] = React.useState('');
+  const [editSaleable, setEditSaleable] = React.useState('');
+  const [editCarpet, setEditCarpet] = React.useState('');
+  const [editFacing, setEditFacing] = React.useState<FacingDirection>('EAST');
+  const [editBaseRate, setEditBaseRate] = React.useState('');
+  const [editParkingEntitled, setEditParkingEntitled] = React.useState('1');
+  const [editCorner, setEditCorner] = React.useState(false);
+  const [editPublished, setEditPublished] = React.useState(false);
+
+  // Quick Add Customer in Flat Drawer
+  const [quickCustomerModalOpen, setQuickCustomerModalOpen] = React.useState(false);
+  const [quickCustName, setQuickCustName] = React.useState('');
+  const [quickCustPhone, setQuickCustPhone] = React.useState('');
+  const [quickCustEmail, setQuickCustEmail] = React.useState('');
+  const [quickCustNotes, setQuickCustNotes] = React.useState('');
+  const [drawerNotice, setDrawerNotice] = React.useState<string | null>(null);
   const [floorPlanUrl, setFloorPlanUrl] = React.useState<string | null>(null);
   React.useEffect(() => {
     let active = true;
@@ -457,6 +487,7 @@ export function ProjectsAndInventoryPage() {
         towerId: unitTowerId || null,
         towerName: selectedTowerObj?.name,
         floorNumber: unitTypeVal === 'PLOT' || unitTypeVal === 'VILLA' ? 0 : Number(unitFloorNo),
+        series: unitSeries.trim().toUpperCase() || undefined,
         unitNumber,
         unitType: unitTypeVal,
         bhk: unitBhk,
@@ -474,10 +505,95 @@ export function ProjectsAndInventoryPage() {
       setUnits((prev) => [...prev.filter((u) => u.id !== createdUnit.id), createdUnit]);
       setCreateUnitOpen(false);
       setUnitNumber('');
+      setUnitSeries('01');
       setFloorPlan(null);
-      setBannerMsg(`Added unit ${unitNumber.toUpperCase()} to inventory.`);
+      setBannerMsg(`Added unit ${unitNumber.toUpperCase()} (Series ${createdUnit.series || 'N/A'}) to inventory.`);
     } catch (err) {
       setBannerMsg(err instanceof Error ? err.message : 'Failed to create unit.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleOpenEdit = (unit: Unit) => {
+    setEditUnitId(unit.id);
+    setEditUnitNumber(unit.unitNumber);
+    setEditUnitSeries(unit.series ?? '');
+    setEditFloorNo(String(unit.floorNumber));
+    setEditUnitTypeVal(unit.unitType);
+    setEditBhk(unit.bhk);
+    setEditSaleable(String(unit.saleableAreaSqft));
+    setEditCarpet(String(unit.carpetAreaSqft));
+    setEditFacing(unit.facing);
+    setEditBaseRate(String(unit.baseRatePerSqft));
+    setEditParkingEntitled(String(unit.parkingEntitlementCount));
+    setEditCorner(Boolean(unit.isCorner));
+    setEditPublished(Boolean(unit.isPublicPublished));
+    setEditUnitOpen(true);
+  };
+
+  const handleUpdateUnit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrgId || !editUnitId) return;
+    setBusy(true);
+    try {
+      const updated = await callBackendFunction<any, Unit>('updateUnit', {
+        orgId: activeOrgId,
+        unitId: editUnitId,
+        unitNumber: editUnitNumber,
+        series: editUnitSeries.trim() || undefined,
+        floorNumber: Number(editFloorNo),
+        unitType: editUnitTypeVal,
+        bhk: editBhk,
+        saleableAreaSqft: Number(editSaleable),
+        carpetAreaSqft: Number(editCarpet),
+        facing: editFacing,
+        baseRatePerSqft: Number(editBaseRate),
+        parkingEntitlementCount: Number(editParkingEntitled),
+        isCorner: editCorner,
+        isPublicPublished: editPublished,
+      });
+      setUnits((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+      setSelectedUnit(updated);
+      setEditUnitOpen(false);
+      setBannerMsg(`Unit ${updated.unitNumber} updated successfully.`);
+    } catch (err) {
+      setBannerMsg(err instanceof Error ? err.message : 'Failed to update unit.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleQuickAddCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrgId) return;
+    setBusy(true);
+    try {
+      const res = await callBackendFunction<any, { lead: Lead; deduplicated: boolean }>('createLead', {
+        orgId: activeOrgId,
+        projectId: selectedUnit?.projectId ?? currentProjectId,
+        customerName: quickCustName.trim(),
+        phone: quickCustPhone.trim(),
+        email: quickCustEmail.trim() || undefined,
+        source: 'MANUAL',
+        isCustomer: true,
+        notes: quickCustNotes.trim() || undefined,
+      });
+      const newLead = res.lead;
+      setCustomerLeads((prev) => {
+        const exists = prev.find((l) => l.id === newLead.id);
+        return exists ? prev.map((l) => (l.id === newLead.id ? newLead : l)) : [newLead, ...prev];
+      });
+      setHoldCustomer(newLead.id);
+      setDrawerNotice(null);
+      setQuickCustomerModalOpen(false);
+      setQuickCustName('');
+      setQuickCustPhone('');
+      setQuickCustEmail('');
+      setQuickCustNotes('');
+      setBannerMsg(`Customer "${newLead.customerName}" registered and selected.`);
+    } catch (err) {
+      setDrawerNotice(err instanceof Error ? err.message : 'Failed to add customer.');
     } finally {
       setBusy(false);
     }
@@ -537,8 +653,17 @@ export function ProjectsAndInventoryPage() {
     action: 'HOLD' | 'RESERVE' | 'RELEASE' | 'CANCEL'
   ) => {
     if (!activeOrgId) return;
+    setDrawerNotice(null);
     if ((action === 'HOLD' || action === 'RESERVE') && !holdCustomer && !unit.heldForLeadId) {
-      setBannerMsg('Select a customer lead before holding or reserving this flat.');
+      const msg = 'Please select or add a customer lead before holding or reserving this flat.';
+      setBannerMsg(msg);
+      setDrawerNotice(msg);
+      return;
+    }
+    if ((action === 'HOLD' || action === 'RESERVE') && Number(holdAdvance) > 0 && !holdReference.trim()) {
+      const msg = 'Please enter a receipt or payment reference for the advance amount.';
+      setBannerMsg(msg);
+      setDrawerNotice(msg);
       return;
     }
     setBusy(true);
@@ -555,10 +680,14 @@ export function ProjectsAndInventoryPage() {
         reason: transitionReason || `Authorized ${action} action`,
       });
       setSelectedUnit(updated);
+      setUnits((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
       setTransitionReason('');
       setBannerMsg(`Unit ${unit.unitNumber} updated to ${targetStatus}.`);
+      setDrawerNotice(null);
     } catch (err) {
-      setBannerMsg(err instanceof Error ? err.message : 'Status transition rejected.');
+      const msg = err instanceof Error ? err.message : 'Status transition rejected.';
+      setBannerMsg(msg);
+      setDrawerNotice(msg);
     } finally {
       setBusy(false);
     }
@@ -961,24 +1090,43 @@ export function ProjectsAndInventoryPage() {
       )}
 
       {/* Unit Details & Transactional Actions Modal */}
-      <Dialog open={Boolean(selectedUnit)} onOpenChange={(o) => !o && setSelectedUnit(null)}>
-        <DialogContent className="sm:max-w-2xl">
+      <Dialog open={Boolean(selectedUnit)} onOpenChange={(o) => { if (!o) { setSelectedUnit(null); setDrawerNotice(null); } }}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           {selectedUnit && (
             <>
               <DialogHeader>
-                <div className="flex items-center justify-between pr-6">
+                <div className="flex items-center justify-between pr-6 flex-wrap gap-2">
                   <DialogTitle className="text-lg">
                     Unit {selectedUnit.unitNumber} — {selectedUnit.bhk} ({selectedUnit.unitType})
                   </DialogTitle>
-                  <StatusBadge status={selectedUnit.status} />
+                  <div className="flex items-center gap-2">
+                    <PermissionGate permission="inventory:manage" projectId={selectedUnit.projectId}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs gap-1 font-medium"
+                        onClick={() => handleOpenEdit(selectedUnit)}
+                      >
+                        <Edit className="h-3.5 w-3.5" />
+                        Edit Flat
+                      </Button>
+                    </PermissionGate>
+                    <StatusBadge status={selectedUnit.status} />
+                  </div>
                 </div>
                 <DialogDescription>
                   Unit ID: {selectedUnit.id} • {selectedUnit.towerName || 'Direct Plot/Villa'} •
-                  Floor {selectedUnit.floorNumber}
+                  Floor {selectedUnit.floorNumber} {selectedUnit.series ? `• Series ${selectedUnit.series}` : ''}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="grid gap-3 sm:grid-cols-3 text-xs rounded-lg border border-border bg-secondary/40 p-4">
+                <div>
+                  <span className="text-muted-foreground">Series / Layout:</span>
+                  <div className="font-semibold text-foreground">
+                    Series {selectedUnit.series || 'N/A'}
+                  </div>
+                </div>
                 <div>
                   <span className="text-muted-foreground">Saleable Area:</span>
                   <div className="font-semibold text-foreground">
@@ -1010,7 +1158,7 @@ export function ProjectsAndInventoryPage() {
                     {formatInr(selectedUnit.baseRatePerSqft)}
                   </div>
                 </div>
-                <div>
+                <div className="sm:col-span-3">
                   <span className="text-muted-foreground">Calculated Consideration:</span>
                   <div className="font-bold text-primary text-sm flex items-center gap-1.5 flex-wrap">
                     {formatInr(selectedUnit.calculatedTotalPrice)}
@@ -1028,24 +1176,143 @@ export function ProjectsAndInventoryPage() {
               </div>
 
               {/* Status Workflow Actions */}
-              <div className="space-y-2.5 rounded-lg border border-border p-3.5">
+              <div className="space-y-3 rounded-lg border border-border p-3.5">
                 <div className="text-xs font-semibold text-foreground">
-                  Inventory Workflow & Cost Sheet Actions
+                  Inventory Workflow & Customer Allocation
                 </div>
-                {floorPlanUrl && <a className="block text-primary underline text-sm" href={floorPlanUrl} target="_blank" rel="noopener noreferrer">View floor plan</a>}
-                <Label>Customer lead for hold / reservation</Label>
-                <Select value={holdCustomer || selectedUnit.heldForLeadId || ''} onValueChange={setHoldCustomer}>
-                  <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
-                  <SelectContent>{customerLeads.map((lead) => <SelectItem key={lead.id} value={lead.id}>{lead.customerName} — {lead.normalizedPhone}</SelectItem>)}</SelectContent>
-                </Select>
-                <Label>Advance paid</Label><Input type="number" min={0} step="0.01" value={holdAdvance} onChange={(e) => setHoldAdvance(e.target.value)} />
-                <Label>Receipt / payment reference</Label><Input value={holdReference} onChange={(e) => setHoldReference(e.target.value)} />
-                <Input
-                  placeholder="Optional / required reason for hold, release, or cancellation..."
-                  value={transitionReason}
-                  onChange={(e) => setTransitionReason(e.target.value)}
-                />
-                <div className="flex flex-wrap gap-2">
+                {floorPlanUrl && (
+                  <a className="block text-primary underline text-sm" href={floorPlanUrl} target="_blank" rel="noopener noreferrer">
+                    View floor plan
+                  </a>
+                )}
+
+                {/* Display Current Hold/Reserve Customer Details */}
+                {selectedUnit.heldForLeadId && (
+                  <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-1.5">
+                        <Users className="h-3.5 w-3.5 text-primary" />
+                        Current Assigned Buyer / Lead:
+                      </span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary">
+                        {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.isCustomer ? 'Verified Customer' : 'Prospect'}
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-foreground">
+                      {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.customerName || 'Assigned Customer'}
+                      {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.phone && (
+                        <span className="text-xs font-normal text-muted-foreground ml-2">
+                          ({customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.phone})
+                        </span>
+                      )}
+                    </div>
+                    {selectedUnit.holdExpiresAt && (
+                      <div className="text-muted-foreground text-[11px]">
+                        Hold expiration: {new Date(selectedUnit.holdExpiresAt).toLocaleString()}
+                      </div>
+                    )}
+                    {(selectedUnit.holdAdvanceAmount ?? 0) > 0 && (
+                      <div className="text-muted-foreground text-[11px]">
+                        Advance Paid: {formatInr(selectedUnit.holdAdvanceAmount ?? 0)}
+                        {selectedUnit.holdPaymentReference ? ` (Ref: ${selectedUnit.holdPaymentReference})` : ''}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Customer Selector & Add Customer Option */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-medium">Customer for Hold / Reservation</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs text-primary font-medium hover:bg-primary/10 gap-1 px-1.5"
+                      onClick={() => {
+                        setDrawerNotice(null);
+                        setQuickCustomerModalOpen(true);
+                      }}
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      + Add Customer
+                    </Button>
+                  </div>
+                  <Select
+                    value={holdCustomer || selectedUnit.heldForLeadId || ''}
+                    onValueChange={(val) => {
+                      setHoldCustomer(val);
+                      setDrawerNotice(null);
+                    }}
+                  >
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Select existing customer or prospect" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customerLeads.length === 0 ? (
+                        <div className="p-2 text-xs text-muted-foreground text-center">
+                          No customer leads yet. Click "+ Add Customer" above.
+                        </div>
+                      ) : (
+                        customerLeads.map((lead) => (
+                          <SelectItem key={lead.id} value={lead.id}>
+                            <span className="font-medium">{lead.customerName}</span>
+                            <span className="text-muted-foreground text-[11px] ml-1.5">
+                              [{lead.isCustomer ? 'Customer' : 'Prospect'}] • {lead.normalizedPhone}
+                            </span>
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Advance paid (INR)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      className="h-8 text-xs"
+                      value={holdAdvance}
+                      onChange={(e) => {
+                        setHoldAdvance(e.target.value);
+                        setDrawerNotice(null);
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Receipt / Payment Ref</Label>
+                    <Input
+                      className="h-8 text-xs"
+                      placeholder="Required if advance > 0"
+                      value={holdReference}
+                      onChange={(e) => {
+                        setHoldReference(e.target.value);
+                        setDrawerNotice(null);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Workflow Notes / Reason</Label>
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="Optional reason or authorization notes..."
+                    value={transitionReason}
+                    onChange={(e) => setTransitionReason(e.target.value)}
+                  />
+                </div>
+
+                {drawerNotice && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+                    {drawerNotice}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2 pt-1">
                   <Button
                     size="sm"
                     onClick={() => {
@@ -1314,6 +1581,24 @@ export function ProjectsAndInventoryPage() {
                 <Input required placeholder="e.g., 101, A-1204, VILLA-08 or PLOT-12" value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} />
               </div>
               <div className="space-y-1">
+                <Label>Flat / Unit Series *</Label>
+                <Input
+                  required
+                  placeholder="e.g., 01, 02, 1, 2, A"
+                  value={unitSeries}
+                  onChange={(e) => {
+                    const s = e.target.value.trim().toUpperCase();
+                    setUnitSeries(s);
+                    if (s && unitFloorNo && (!unitNumber || unitNumber.endsWith(s))) {
+                      const tCode = unitTowerId ? towers.find((t) => t.id === unitTowerId)?.code : '';
+                      const fl = unitFloorNo === '0' ? '' : unitFloorNo;
+                      setUnitNumber(tCode ? `${tCode}-${fl}${s}` : `${fl}${s}`);
+                    }
+                  }}
+                />
+                <p className="text-[10px] text-muted-foreground">Unique series per floor in this tower/project.</p>
+              </div>
+              <div className="space-y-1">
                 <Label>Unit Type *</Label>
                 <Select value={unitTypeVal} onValueChange={(v: any) => setUnitTypeVal(v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1513,6 +1798,193 @@ export function ProjectsAndInventoryPage() {
             <DialogFooter>
               <Button type="submit" disabled={busy || !bulkTowerId}>
                 {busy ? 'Generating...' : 'Generate Inventory'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Unit Modal */}
+      <Dialog open={editUnitOpen} onOpenChange={setEditUnitOpen}>
+        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Flat / Unit Specifications</DialogTitle>
+            <DialogDescription>
+              Update unit numbering, series, layout, areas, and baseline rate.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateUnit} className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Unit / Flat Number *</Label>
+                <Input
+                  required
+                  value={editUnitNumber}
+                  onChange={(e) => setEditUnitNumber(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Flat Series Number</Label>
+                <Input
+                  placeholder="e.g., 01, 02, A"
+                  value={editUnitSeries}
+                  onChange={(e) => setEditUnitSeries(e.target.value.toUpperCase())}
+                />
+                <p className="text-[10px] text-muted-foreground">Unique per floor in this tower.</p>
+              </div>
+              <div className="space-y-1">
+                <Label>Floor Number *</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={editFloorNo}
+                  onChange={(e) => setEditFloorNo(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Unit Type *</Label>
+                <Select value={editUnitTypeVal} onValueChange={(v: any) => setEditUnitTypeVal(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="APARTMENT">Apartment</SelectItem>
+                    <SelectItem value="PENTHOUSE">Penthouse</SelectItem>
+                    <SelectItem value="VILLA">Villa</SelectItem>
+                    <SelectItem value="PLOT">Plot</SelectItem>
+                    <SelectItem value="SHOP">Retail Shop</SelectItem>
+                    <SelectItem value="OFFICE">Office Suite</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Configuration / BHK *</Label>
+                <Input
+                  required
+                  value={editBhk}
+                  onChange={(e) => setEditBhk(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Facing *</Label>
+                <Select value={editFacing} onValueChange={(v: any) => setEditFacing(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FACING_OPTIONS.map((f) => (
+                      <SelectItem key={f} value={f}>{f}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Saleable Area (sq. ft.) *</Label>
+                <Input
+                  required
+                  type="number"
+                  value={editSaleable}
+                  onChange={(e) => setEditSaleable(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Carpet Area (sq. ft.) *</Label>
+                <Input
+                  required
+                  type="number"
+                  value={editCarpet}
+                  onChange={(e) => setEditCarpet(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Base Rate per sq. ft. (INR) *</Label>
+                <Input
+                  required
+                  type="number"
+                  value={editBaseRate}
+                  onChange={(e) => setEditBaseRate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Parking Entitlements</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={editParkingEntitled}
+                  onChange={(e) => setEditParkingEntitled(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-between pt-1">
+              <label className="flex items-center gap-2 text-xs">
+                <Switch checked={editCorner} onCheckedChange={setEditCorner} />
+                Corner Unit
+              </label>
+              <label className="flex items-center gap-2 text-xs">
+                <Switch checked={editPublished} onCheckedChange={setEditPublished} />
+                Publish on Public Portal
+              </label>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditUnitOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy}>
+                {busy ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Add Customer Modal inside Flat Section */}
+      <Dialog open={quickCustomerModalOpen} onOpenChange={setQuickCustomerModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Buyer Customer</DialogTitle>
+            <DialogDescription>
+              Register a buyer directly to allocate, hold, or reserve this flat.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleQuickAddCustomer} className="space-y-3">
+            <div className="space-y-1">
+              <Label>Customer Full Name *</Label>
+              <Input
+                required
+                placeholder="e.g., Rajesh Kumar"
+                value={quickCustName}
+                onChange={(e) => setQuickCustName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Mobile / Phone Number *</Label>
+              <Input
+                required
+                placeholder="+91 9876543210"
+                value={quickCustPhone}
+                onChange={(e) => setQuickCustPhone(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Email Address</Label>
+              <Input
+                type="email"
+                placeholder="customer@example.com"
+                value={quickCustEmail}
+                onChange={(e) => setQuickCustEmail(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Notes / Requirements</Label>
+              <Input
+                placeholder="e.g., Interested in 3 BHK high floor facing park"
+                value={quickCustNotes}
+                onChange={(e) => setQuickCustNotes(e.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setQuickCustomerModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy}>
+                {busy ? 'Adding...' : 'Create & Select Customer'}
               </Button>
             </DialogFooter>
           </form>

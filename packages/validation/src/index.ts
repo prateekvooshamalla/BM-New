@@ -281,6 +281,7 @@ export const createUnitSchema = z
     towerName: z.string().optional(),
     floorId: z.string().nullable().optional(),
     floorNumber: z.coerce.number().int().min(-10).max(200).default(0),
+    series: z.string().trim().min(1).max(20).optional(),
     unitNumber: z.string().min(1, 'Unit / Villa / Plot / Office identifier is required').max(40),
     unitType: unitTypeSchema,
     inventorySource: z
@@ -320,6 +321,38 @@ export const createUnitSchema = z
     message: 'Usable / carpet area cannot exceed primary / saleable area',
     path: ['carpetAreaSqft'],
   });
+
+export const updateUnitSchema = z.object({
+  orgId: z.string().min(1),
+  unitId: z.string().min(1),
+  unitNumber: z.string().trim().min(1).max(40).optional(),
+  series: z.string().trim().min(1).max(20).optional(),
+  floorNumber: z.coerce.number().int().min(-10).max(200).optional(),
+  unitType: unitTypeSchema.optional(),
+  bhk: z.string().trim().min(1).max(40).optional(),
+  facing: z
+    .enum([
+      'EAST',
+      'WEST',
+      'NORTH',
+      'SOUTH',
+      'NORTH_EAST',
+      'NORTH_WEST',
+      'SOUTH_EAST',
+      'SOUTH_WEST',
+    ])
+    .optional(),
+  saleableAreaSqft: z.coerce.number().positive().optional(),
+  carpetAreaSqft: z.coerce.number().positive().optional(),
+  baseRatePerSqft: z.coerce.number().nonnegative().optional(),
+  baseUnitPrice: z.coerce.number().nonnegative().optional(),
+  parkingEntitlementCount: z.coerce.number().int().min(0).max(50).optional(),
+  isCorner: z.boolean().optional(),
+  isPublicPublished: z.boolean().optional(),
+  listingMode: z.enum(['BUY', 'RENT', 'LEASE']).optional(),
+  floorPlanStoragePath: z.string().max(500).nullable().optional(),
+  notes: z.string().max(1000).optional(),
+});
 
 export const bulkGenerateUnitsSchema = z.object({
   orgId: z.string().min(1),
@@ -702,7 +735,14 @@ export const createLeadSchema = z.object({
     .optional(),
   assignedAgentUid: z.string().optional(),
   partnerOrgId: z.string().optional(),
+  isCustomer: z.boolean().optional(),
   whatsappOptIn: z.boolean().default(true),
+  notes: z.string().max(1000).optional(),
+});
+
+export const convertLeadToCustomerSchema = z.object({
+  orgId: z.string().min(1),
+  leadId: z.string().min(1),
   notes: z.string().max(1000).optional(),
 });
 

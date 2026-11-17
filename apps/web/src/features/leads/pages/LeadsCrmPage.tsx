@@ -10,6 +10,7 @@ import {
   Plus,
   Sparkles,
   Upload,
+  UserCheck,
   Users,
 } from 'lucide-react';
 import {
@@ -70,6 +71,7 @@ export function LeadsCrmPage() {
   const [leads, setLeads] = React.useState<Lead[]>([]);
   const [members, setMembers] = React.useState<OrganizationMember[]>([]);
   const [viewMode, setViewMode] = React.useState<'kanban' | 'table'>('kanban');
+  const [customerFilter, setCustomerFilter] = React.useState<'PROSPECTS' | 'CUSTOMERS' | 'ALL'>('PROSPECTS');
   const [sourceFilter, setSourceFilter] = React.useState<string>('ALL');
   const [qualFilter, setQualFilter] = React.useState<string>('ALL');
 
@@ -139,11 +141,35 @@ export function LeadsCrmPage() {
 
   const filteredLeads = React.useMemo(() => {
     return leads.filter((l) => {
+      const isCust = Boolean(l.isCustomer || l.stage === 'BOOKED' || l.stage === 'CLOSED');
+      if (customerFilter === 'PROSPECTS' && isCust) return false;
+      if (customerFilter === 'CUSTOMERS' && !isCust) return false;
       if (sourceFilter !== 'ALL' && l.source !== sourceFilter) return false;
       if (qualFilter !== 'ALL' && l.qualificationStatus !== qualFilter) return false;
       return true;
     });
-  }, [leads, sourceFilter, qualFilter]);
+  }, [leads, customerFilter, sourceFilter, qualFilter]);
+
+  const handleConvertToCustomer = async (lead: Lead) => {
+    if (!activeOrgId) return;
+    setBusy(true);
+    try {
+      const updated = await callBackendFunction<any, Lead>('convertLeadToCustomer', {
+        orgId: activeOrgId,
+        leadId: lead.id,
+        notes: `Converted to verified Customer from CRM.`,
+      });
+      setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+      if (selectedLead?.id === updated.id) {
+        setSelectedLead(updated);
+      }
+      setBanner(`Successfully converted "${lead.customerName}" from Prospect to Customer!`);
+    } catch (err) {
+      setBanner(err instanceof Error ? err.message : 'Failed to convert to customer.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -365,6 +391,37 @@ export function LeadsCrmPage() {
               Conversion Rate: <strong className="text-emerald-700">{conversionPct}%</strong>
             </span>
 
+            {/* Prospects vs Customers Segment Toggle */}
+            <div className="flex items-center gap-1 rounded-md border border-border p-0.5 bg-secondary/60">
+              <Button
+                type="button"
+                variant={customerFilter === 'PROSPECTS' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 text-xs px-2.5 font-medium"
+                onClick={() => setCustomerFilter('PROSPECTS')}
+              >
+                Prospects ({leads.filter((l) => !l.isCustomer && l.stage !== 'BOOKED' && l.stage !== 'CLOSED').length})
+              </Button>
+              <Button
+                type="button"
+                variant={customerFilter === 'CUSTOMERS' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 text-xs px-2.5 font-medium"
+                onClick={() => setCustomerFilter('CUSTOMERS')}
+              >
+                Customers ({leads.filter((l) => l.isCustomer || l.stage === 'BOOKED' || l.stage === 'CLOSED').length})
+              </Button>
+              <Button
+                type="button"
+                variant={customerFilter === 'ALL' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 text-xs px-2.5 font-medium"
+                onClick={() => setCustomerFilter('ALL')}
+              >
+                All ({leads.length})
+              </Button>
+            </div>
+
             <Select value={sourceFilter} onValueChange={setSourceFilter}>
               <SelectTrigger className="h-8 w-40 text-xs">
                 <SelectValue placeholder="Source" />
@@ -471,7 +528,18 @@ export function LeadsCrmPage() {
                       className="rounded-lg border border-border bg-card p-3 shadow-2xs hover:border-primary/50 cursor-pointer transition-colors"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold truncate">{lead.customerName}</span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm font-semibold truncate">{lead.customerName}</span>
+                          {lead.isCustomer || lead.stage === 'BOOKED' || lead.stage === 'CLOSED' ? (
+                            <span className="shrink-0 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-1.5 py-0.2 text-[9px] font-bold">
+                              Customer
+                            </span>
+                          ) : (
+                            <span className="shrink-0 rounded bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 px-1.5 py-0.2 text-[9px] font-bold">
+                              Prospect
+                            </span>
+                          )}
+                        </div>
                         <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">
                           {lead.leadScore}
                         </span>
@@ -501,7 +569,21 @@ export function LeadsCrmPage() {
           data={filteredLeads}
           searchPlaceholder="Search lead name, phone, email, or source..."
           columns={[
-            { accessorKey: 'customerName', header: 'Customer' },
+            {
+              id: 'customerType',
+              header: 'Status',
+              cell: ({ row }) =>
+                row.original.isCustomer || row.original.stage === 'BOOKED' || row.original.stage === 'CLOSED' ? (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                    Customer
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                    Prospect
+                  </span>
+                ),
+            },
+            { accessorKey: 'customerName', header: 'Contact Name' },
             { accessorKey: 'normalizedPhone', header: 'Phone' },
             {
               accessorKey: 'source',
@@ -522,12 +604,29 @@ export function LeadsCrmPage() {
               cell: ({ row }) => <StatusBadge status={row.original.stage} />,
             },
             {
-              id: 'open',
-              header: 'Workspace',
+              id: 'actions',
+              header: 'Actions',
               cell: ({ row }) => (
-                <Button variant="outline" size="sm" onClick={() => setSelectedLead(row.original)}>
-                  Open 360°
-                </Button>
+                <div className="flex items-center gap-1.5">
+                  {!row.original.isCustomer && row.original.stage !== 'BOOKED' && row.original.stage !== 'CLOSED' && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50"
+                      title="Convert to Customer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleConvertToCustomer(row.original);
+                      }}
+                    >
+                      <UserCheck className="h-3.5 w-3.5 mr-1" />
+                      Convert
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setSelectedLead(row.original)}>
+                    Open 360°
+                  </Button>
+                </div>
               ),
             },
           ]}
@@ -540,19 +639,42 @@ export function LeadsCrmPage() {
           {selectedLead && (
             <>
               <DialogHeader>
-                <div className="flex items-center justify-between pr-6">
-                  <DialogTitle>
-                    {selectedLead.customerName} ({selectedLead.normalizedPhone})
-                  </DialogTitle>
+                <div className="flex items-center justify-between pr-6 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <DialogTitle className="text-lg">
+                      {selectedLead.customerName}
+                    </DialogTitle>
+                    {selectedLead.isCustomer || selectedLead.stage === 'BOOKED' || selectedLead.stage === 'CLOSED' ? (
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                        Verified Customer
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                        Prospect
+                      </span>
+                    )}
+                  </div>
                   <StatusBadge status={selectedLead.stage} />
                 </div>
                 <DialogDescription>
-                  Source: {selectedLead.source} • Score: {selectedLead.leadScore}/100 •
+                  Phone: {selectedLead.normalizedPhone} • Source: {selectedLead.source} • Score: {selectedLead.leadScore}/100 •
                   Qualification: {selectedLead.qualificationStatus}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+                {!selectedLead.isCustomer && selectedLead.stage !== 'BOOKED' && selectedLead.stage !== 'CLOSED' && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="h-8 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                    disabled={busy}
+                    onClick={() => handleConvertToCustomer(selectedLead)}
+                  >
+                    <UserCheck className="h-3.5 w-3.5" />
+                    Convert to Customer
+                  </Button>
+                )}
                 <Select
                   value={selectedLead.stage}
                   onValueChange={(v) => handleStageChange(selectedLead, v as LeadStage)}

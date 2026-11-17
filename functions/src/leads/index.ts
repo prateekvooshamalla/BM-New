@@ -12,7 +12,10 @@ import {
   type Organization,
   type Project,
 } from '@bharat-makaan/shared';
-import { createLeadSchema } from '@bharat-makaan/validation';
+import {
+  createLeadSchema,
+  convertLeadToCustomerSchema,
+} from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
 import { parseCallableInput } from '../shared/validation';
@@ -125,6 +128,9 @@ export async function ingestLeadService(
     qualificationStatus: score >= 65 ? 'HOT' : score >= 45 ? 'WARM' : 'UNREVIEWED',
     leadScore: score,
     duplicateOfLeadId: null,
+    isCustomer: Boolean(input.isCustomer),
+    customerConvertedAt: input.isCustomer ? nowIso : null,
+    convertedByUid: input.isCustomer ? actor.uid : null,
     notesSummary: input.notes?.trim() || undefined,
     nextFollowUpAt: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
     linkedQuotationIds: [],
@@ -237,6 +243,60 @@ export async function updateLeadStageService(
   return updated;
 }
 
+export async function convertLeadToCustomerService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  params: {
+    orgId: string;
+    leadId: string;
+    notes?: string;
+  }
+): Promise<Lead> {
+  const ref = db.collection('leads').doc(params.leadId);
+  const snap = await ref.get();
+  if (!snap.exists || snap.data()?.orgId !== params.orgId) {
+    throw new HttpsError('not-found', 'Lead not found.');
+  }
+
+  const prev = snap.data() as Lead;
+  const nowIso = new Date().toISOString();
+
+  const updated: Lead = {
+    ...prev,
+    isCustomer: true,
+    customerConvertedAt: prev.customerConvertedAt || nowIso,
+    convertedByUid: actor.uid,
+    updatedAt: nowIso,
+  };
+
+  await ref.set(updated);
+
+  const actRef = db.collection('lead_activities').doc();
+  await actRef.set({
+    id: actRef.id,
+    orgId: params.orgId,
+    leadId: updated.id,
+    type: 'STAGE_CHANGE',
+    title: 'Converted from Prospect to Customer',
+    body: params.notes || `Prospect ${prev.customerName} successfully converted to verified buyer customer.`,
+    performedByUid: actor.uid,
+    createdAt: nowIso,
+  } satisfies LeadActivity);
+
+  await writeAuditEvent(db, {
+    orgId: params.orgId,
+    actorUid: actor.uid,
+    actorEmail: actor.email,
+    action: 'LEAD_CONVERTED_TO_CUSTOMER',
+    category: 'SYSTEM',
+    entityType: 'lead',
+    entityId: updated.id,
+    summary: `Prospect ${updated.customerName} converted to Customer.`,
+  });
+
+  return updated;
+}
+
 // --- Cloud Functions v2 Callables ---
 
 export const createLead = onCall(async (request) => {
@@ -249,6 +309,12 @@ export const createLead = onCall(async (request) => {
     targetProjectId
   );
   return ingestLeadService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
+});
+
+export const convertLeadToCustomer = onCall(async (request) => {
+  const input = convertLeadToCustomerSchema.parse(request.data);
+  const { actor } = await requireOrgPermission(request, input.orgId, 'leads:edit');
+  return convertLeadToCustomerService(adminDb, actor, input);
 });
 
 export const updateLeadStage = onCall(async (request) => {

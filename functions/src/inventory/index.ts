@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   toMinorUnits,
   validateUnitTransition,
+  type Lead,
   type Project,
   type ProjectStats,
   type Unit,
@@ -12,6 +13,7 @@ import {
 } from '@bharat-makaan/shared';
 import {
   createUnitSchema,
+  updateUnitSchema,
   unitStatusTransitionSchema,
   unitTypeSchema,
 } from '@bharat-makaan/validation';
@@ -72,6 +74,26 @@ export async function createUnitService(
       );
     }
 
+    const series = input.series ? input.series.trim().toUpperCase() : undefined;
+    if (series) {
+      let seriesQuery = db
+        .collection('units')
+        .where('orgId', '==', input.orgId)
+        .where('projectId', '==', input.projectId)
+        .where('floorNumber', '==', input.floorNumber)
+        .where('series', '==', series);
+      if (input.towerId) {
+        seriesQuery = seriesQuery.where('towerId', '==', input.towerId);
+      }
+      const seriesSnap = await tx.get(seriesQuery.limit(1));
+      if (!seriesSnap.empty) {
+        throw new HttpsError(
+          'already-exists',
+          `Series "${series}" already exists on floor ${input.floorNumber} of this ${input.towerId ? 'tower' : 'project'}.`
+        );
+      }
+    }
+
     const currencyCode = input.currencyCode ?? proj.currencyCode ?? 'INR';
     const areaUnit = input.areaUnit ?? proj.areaUnit ?? 'SQFT';
     const pricingMode = input.pricingMode ?? 'PER_AREA';
@@ -92,6 +114,7 @@ export async function createUnitService(
       towerName: input.towerName,
       floorId: input.floorId ?? null,
       floorNumber: input.floorNumber,
+      series: series ?? undefined,
       unitNumber: input.unitNumber.trim().toUpperCase(),
       unitType: input.unitType,
       inventorySource: input.inventorySource ?? 'PRIMARY_DEVELOPER',
@@ -184,6 +207,142 @@ export async function createUnitService(
   return createdUnit;
 }
 
+export async function updateUnitService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  rawInput: unknown
+): Promise<Unit> {
+  const input = updateUnitSchema.parse(rawInput);
+  const nowIso = new Date().toISOString();
+
+  return db.runTransaction(async (tx) => {
+    const unitRef = db.collection('units').doc(input.unitId);
+    const unitSnap = await tx.get(unitRef);
+    if (!unitSnap.exists || unitSnap.data()?.orgId !== input.orgId) {
+      throw new HttpsError('not-found', 'Unit not found in this organization.');
+    }
+    const unit = unitSnap.data() as Unit;
+
+    // Disallow altering core unit specs if booked or registered unless super admin / builder admin
+    if (
+      ['BOOKED', 'AGREEMENT', 'REGISTERED'].includes(unit.status) &&
+      (input.saleableAreaSqft || input.carpetAreaSqft || input.unitType || input.bhk) &&
+      !actor.isSuperAdmin &&
+      actorRole !== 'BUILDER_ADMIN'
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        `Unit ${unit.unitNumber} is currently ${unit.status} and cannot be modified without builder admin override.`
+      );
+    }
+
+    const nextFloor = input.floorNumber !== undefined ? input.floorNumber : unit.floorNumber;
+    const nextSeries = input.series ? input.series.trim().toUpperCase() : unit.series;
+    const nextUnitNumber = input.unitNumber ? input.unitNumber.trim().toUpperCase() : unit.unitNumber;
+
+    // Check duplicate unitNumber if changed
+    if (input.unitNumber && nextUnitNumber !== unit.unitNumber) {
+      const dupSnap = await tx.get(
+        db
+          .collection('units')
+          .where('orgId', '==', input.orgId)
+          .where('projectId', '==', unit.projectId)
+          .where('unitNumber', '==', nextUnitNumber)
+          .limit(1)
+      );
+      if (!dupSnap.empty && dupSnap.docs[0]!.id !== unit.id) {
+        throw new HttpsError('already-exists', `Unit "${nextUnitNumber}" already exists in this project.`);
+      }
+    }
+
+    // Check duplicate series on same floor/tower if changed
+    if (nextSeries && (input.series || input.floorNumber !== undefined)) {
+      let seriesQuery = db
+        .collection('units')
+        .where('orgId', '==', input.orgId)
+        .where('projectId', '==', unit.projectId)
+        .where('floorNumber', '==', nextFloor)
+        .where('series', '==', nextSeries);
+      if (unit.towerId) {
+        seriesQuery = seriesQuery.where('towerId', '==', unit.towerId);
+      }
+      const seriesSnap = await tx.get(seriesQuery);
+      const dupSeries = seriesSnap.docs.find((d) => d.id !== unit.id);
+      if (dupSeries) {
+        throw new HttpsError(
+          'already-exists',
+          `Series "${nextSeries}" already exists on floor ${nextFloor} of this ${unit.towerId ? 'tower' : 'project'}.`
+        );
+      }
+    }
+
+    const nextSaleable = input.saleableAreaSqft ?? unit.saleableAreaSqft;
+    const nextCarpet = input.carpetAreaSqft ?? unit.carpetAreaSqft;
+    if (nextCarpet > nextSaleable) {
+      throw new HttpsError('invalid-argument', 'Carpet area cannot exceed saleable area.');
+    }
+
+    const nextBaseRate = input.baseRatePerSqft !== undefined ? input.baseRatePerSqft : unit.baseRatePerSqft;
+    const nextBasePrice = input.baseUnitPrice !== undefined ? input.baseUnitPrice : unit.baseUnitPrice;
+    const pricingMode = unit.pricingMode ?? 'PER_AREA';
+    const primaryArea = input.saleableAreaSqft ?? unit.primaryArea ?? nextSaleable;
+    const calculatedPrice =
+      pricingMode === 'BASE_UNIT_PRICE' && nextBasePrice !== undefined
+        ? nextBasePrice
+        : Math.round(primaryArea * nextBaseRate * 100) / 100;
+
+    const updatedUnit: Unit = {
+      ...unit,
+      unitNumber: nextUnitNumber,
+      series: nextSeries,
+      floorNumber: nextFloor,
+      bhk: input.bhk ? input.bhk.trim() : unit.bhk,
+      unitType: input.unitType ?? unit.unitType,
+      facing: input.facing ?? unit.facing,
+      saleableAreaSqft: nextSaleable,
+      carpetAreaSqft: nextCarpet,
+      primaryArea: nextSaleable,
+      secondaryArea: nextCarpet,
+      baseRatePerSqft: nextBaseRate,
+      baseUnitPrice: nextBasePrice,
+      calculatedTotalPrice: calculatedPrice + (unit.floorRiseAmount ?? 0) + (unit.premiumChargesAmount ?? 0),
+      calculatedTotalMinor: toMinorUnits(
+        calculatedPrice + (unit.floorRiseAmount ?? 0) + (unit.premiumChargesAmount ?? 0),
+        unit.currencyCode ?? 'INR'
+      ),
+      parkingEntitlementCount: input.parkingEntitlementCount ?? unit.parkingEntitlementCount,
+      isCorner: input.isCorner !== undefined ? input.isCorner : unit.isCorner,
+      isPublicPublished: input.isPublicPublished !== undefined ? input.isPublicPublished : unit.isPublicPublished,
+      listingMode: input.listingMode ?? unit.listingMode,
+      floorPlanStoragePath: input.floorPlanStoragePath !== undefined ? input.floorPlanStoragePath : unit.floorPlanStoragePath,
+      updatedAt: nowIso,
+    };
+
+    tx.set(unitRef, updatedUnit);
+
+    await writeAuditEvent(
+      db,
+      {
+        orgId: input.orgId,
+        actorUid: actor.uid,
+        actorEmail: actor.email,
+        actorRole,
+        action: 'UNIT_UPDATED',
+        category: 'INVENTORY',
+        entityType: 'unit',
+        entityId: unit.id,
+        summary: `Updated unit ${updatedUnit.unitNumber} (Floor ${updatedUnit.floorNumber}, Series ${updatedUnit.series || 'N/A'}).`,
+        before: { unitNumber: unit.unitNumber, series: unit.series, baseRatePerSqft: unit.baseRatePerSqft },
+        after: { unitNumber: updatedUnit.unitNumber, series: updatedUnit.series, baseRatePerSqft: updatedUnit.baseRatePerSqft },
+      },
+      tx
+    );
+
+    return updatedUnit;
+  });
+}
+
 /**
  * Atomic Firestore Transaction for Unit Status Changes.
  * Prevents concurrent conflicting holds/reservations/bookings.
@@ -243,10 +402,24 @@ export async function transitionUnitStatusService(
     if (input.action === 'HOLD' || input.action === 'RESERVE') {
       const leadId = input.leadId ?? unit.heldForLeadId;
       if (leadId) {
-        const lead = await tx.get(db.collection('leads').doc(leadId));
-        if (!lead.exists || lead.data()?.orgId !== input.orgId) {
+        const leadRef = db.collection('leads').doc(leadId);
+        const leadSnap = await tx.get(leadRef);
+        if (!leadSnap.exists || leadSnap.data()?.orgId !== input.orgId) {
           throw new HttpsError('permission-denied', 'Customer must belong to this organization.');
         }
+        const leadData = leadSnap.data() as Lead;
+        // Automatically mark customer status upon reservation / booking / hold
+        const nextStage: Lead['stage'] =
+          input.action === 'RESERVE' &&
+          !['BOOKED', 'CLOSED'].includes(leadData.stage)
+            ? 'NEGOTIATION'
+            : leadData.stage;
+        tx.update(leadRef, {
+          isCustomer: true,
+          customerConvertedAt: leadData.customerConvertedAt || nowIso,
+          stage: nextStage,
+          updatedAt: nowIso,
+        });
       }
       if ((input.holdAdvanceAmount ?? 0) > 0 && !leadId) throw new HttpsError('invalid-argument', 'Select a customer for the advance.');
       if ((input.holdAdvanceAmount ?? 0) > 0 && !input.holdPaymentReference?.trim()) {
@@ -338,6 +511,22 @@ export const createUnit = onCall(async (request) => {
   return createUnitService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
 });
 
+export const updateUnit = onCall(async (request) => {
+  const parsed = updateUnitSchema.parse(request.data);
+  const unitSnap = await adminDb.collection('units').doc(parsed.unitId).get();
+  if (!unitSnap.exists || unitSnap.data()?.orgId !== parsed.orgId) {
+    throw new HttpsError('not-found', 'Unit not found in organization.');
+  }
+  const unitData = unitSnap.data() as Unit;
+  const { actor, member } = await requireOrgPermission(
+    request,
+    parsed.orgId,
+    'inventory:manage',
+    unitData.projectId
+  );
+  return updateUnitService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
+});
+
 const bulkGenerateUnitsSchema = z.object({
   orgId: z.string().min(1),
   projectId: z.string().min(1),
@@ -387,10 +576,11 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
   let skipped = 0;
   for (let fl = input.startFloor; fl <= input.endFloor; fl++) {
     for (let idx = input.startUnitNumber; idx < input.startUnitNumber + input.unitsPerFloor; idx++) {
+      const seriesNo = String(idx).padStart(2, '0');
       const flatNo =
         fl === 0
-          ? `${input.towerCode.toUpperCase()}-${String(idx).padStart(2, '0')}`
-          : `${input.towerCode.toUpperCase()}-${fl}${String(idx).padStart(2, '0')}`;
+          ? `${input.towerCode.toUpperCase()}-${seriesNo}`
+          : `${input.towerCode.toUpperCase()}-${fl}${seriesNo}`;
       try {
         await createUnitService(
           db,
@@ -402,6 +592,7 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
             towerId: input.towerId ?? null,
             towerName: input.towerName,
             floorNumber: fl,
+            series: seriesNo,
             unitNumber: flatNo,
             unitType: input.unitType,
             bhk: input.bhk,
