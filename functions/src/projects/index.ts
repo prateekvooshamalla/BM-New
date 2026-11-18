@@ -319,6 +319,32 @@ export async function createTowerService(
     }
     const proj = projSnap.data() as Project;
 
+    // Check for duplicate tower name or code within the same project
+    const existingTowersSnap = await tx.get(
+      db.collection('towers').where('projectId', '==', input.projectId)
+    );
+    const normalizedNewName = input.name.trim().toLowerCase();
+    const normalizedNewCode = input.code.trim().toUpperCase();
+
+    const duplicateTower = existingTowersSnap.docs.find((doc) => {
+      const data = doc.data() as Tower;
+      return (
+        data.name.trim().toLowerCase() === normalizedNewName ||
+        data.code.trim().toUpperCase() === normalizedNewCode
+      );
+    });
+
+    if (duplicateTower) {
+      const dup = duplicateTower.data() as Tower;
+      const isNameDup = dup.name.trim().toLowerCase() === normalizedNewName;
+      throw new HttpsError(
+        'already-exists',
+        isNameDup
+          ? `A tower with the name "${input.name.trim()}" already exists in this project.`
+          : `A tower with the code "${input.code.trim().toUpperCase()}" already exists in this project.`
+      );
+    }
+
     const ref = db.collection('towers').doc();
     const tower: Tower = {
       id: ref.id,

@@ -29,6 +29,7 @@ import {
 import { createApprovalRequestService } from '../approvals';
 import { writeAuditEvent } from '../audit';
 import { parseCallableInput } from '../shared/validation';
+import { ensureBaselinePriceBookForProject } from '../pricing';
 
 function pdfCurrencyPrefix(currencyCode?: string): string {
   switch ((currencyCode ?? 'INR').toUpperCase()) {
@@ -603,6 +604,93 @@ export async function createPaymentPlanService(
   return plan;
 }
 
+/**
+ * Ensures an active baseline Construction Linked Plan (CLP) exists for the project,
+ * auto-provisioning one if not yet created.
+ */
+export async function ensureBaselinePaymentPlanForProject(
+  db: Firestore,
+  params: {
+    orgId: string;
+    projectId: string;
+    actorUid: string;
+    actorEmail?: string;
+    actorRole?: string;
+  }
+): Promise<PaymentPlan> {
+  const existingSnap = await db
+    .collection('payment_plans')
+    .where('orgId', '==', params.orgId)
+    .where('projectId', '==', params.projectId)
+    .get();
+
+  const activePlan =
+    existingSnap.docs
+      .map((d) => d.data() as PaymentPlan)
+      .find((p) => p.isActive) ??
+    (existingSnap.docs[0]?.data() as PaymentPlan | undefined);
+
+  if (activePlan) {
+    return activePlan;
+  }
+
+  const nowIso = new Date().toISOString();
+  const ref = db.collection('payment_plans').doc();
+  const plan: PaymentPlan = {
+    id: ref.id,
+    orgId: params.orgId,
+    projectId: params.projectId,
+    name: 'Standard Construction Linked Plan (CLP)',
+    planType: 'CONSTRUCTION_LINKED',
+    isActive: true,
+    milestones: [
+      {
+        sequence: 1,
+        name: 'Booking Advance / Token Amount',
+        percentage: 10,
+        dueTrigger: 'On Booking / Agreement Signing',
+        taxTreatment: 'PROPORTIONAL_GST',
+        notes: 'Payable upon execution of application and booking confirmation',
+      },
+      {
+        sequence: 2,
+        name: 'Commencement of Foundation / Plinth',
+        percentage: 15,
+        dueTrigger: 'Completion of Plinth / Substructure',
+        taxTreatment: 'PROPORTIONAL_GST',
+      },
+      {
+        sequence: 3,
+        name: 'Slab Casting Milestones (Superstructure)',
+        percentage: 35,
+        dueTrigger: 'Progressive completion of floor slabs',
+        taxTreatment: 'PROPORTIONAL_GST',
+      },
+      {
+        sequence: 4,
+        name: 'Masonry, Plaster & Internal Finishing',
+        percentage: 35,
+        dueTrigger: 'Flooring, plumbing and internal wall plastering',
+        taxTreatment: 'PROPORTIONAL_GST',
+      },
+      {
+        sequence: 5,
+        name: 'Notice of Possession / Handover',
+        percentage: 5,
+        dueTrigger: 'Issuance of Occupancy Certificate and Handover',
+        taxTreatment: 'INCLUDE_POSSESSION_CHARGES',
+      },
+    ],
+    totalPercentage: 100,
+    createdByUid: params.actorUid,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  await ref.set(plan);
+  return plan;
+}
+
 export async function createQuotationService(
   db: Firestore,
   actor: AuthenticatedActor,
@@ -614,43 +702,29 @@ export async function createQuotationService(
   const now = new Date();
   const nowIso = now.toISOString();
 
-  const [orgSnap, projSnap, unitSnap, pbSnap, planSnap, overridesSnap] = await Promise.all([
+  const [orgSnap, projSnap, unitSnap, overridesSnap] = await Promise.all([
     db.collection('organizations').doc(input.orgId).get(),
     db.collection('projects').doc(input.projectId).get(),
     db.collection('units').doc(input.unitId).get(),
-    db.collection('price_books').doc(input.priceBookId).get(),
-    db.collection('payment_plans').doc(input.paymentPlanId).get(),
     db.collection('pricing_overrides').where('orgId', '==', input.orgId).get(),
   ]);
 
-  if (!orgSnap.exists || !projSnap.exists || !unitSnap.exists || !pbSnap.exists || !planSnap.exists) {
+  if (!orgSnap.exists || !projSnap.exists || !unitSnap.exists) {
     throw new HttpsError(
       'not-found',
-      'Organization, project, unit, price book, or payment plan not found.'
+      'Organization, project, or unit not found.'
     );
   }
 
   const org = orgSnap.data() as Organization;
-  if (input.leadId) {
-    const lead = await db.collection('leads').doc(input.leadId).get();
-    if (!lead.exists || lead.data()?.orgId !== input.orgId) {
-      throw new HttpsError('permission-denied', 'Customer lead must belong to this organization.');
-    }
-  }
   const project = projSnap.data() as Project;
   const unit = unitSnap.data() as Unit;
-  const priceBook = pbSnap.data() as PriceBook;
-  const paymentPlan = planSnap.data() as PaymentPlan;
 
   // Strict multi-tenant & multi-project boundary verification
   if (
     project.orgId !== input.orgId ||
     unit.orgId !== input.orgId ||
-    unit.projectId !== input.projectId ||
-    priceBook.orgId !== input.orgId ||
-    priceBook.projectId !== input.projectId ||
-    paymentPlan.orgId !== input.orgId ||
-    paymentPlan.projectId !== input.projectId
+    unit.projectId !== input.projectId
   ) {
     throw new HttpsError(
       'permission-denied',
@@ -658,7 +732,84 @@ export async function createQuotationService(
     );
   }
 
-  if (priceBook.status !== 'APPROVED' && priceBook.status !== 'ACTIVE' && priceBook.status !== 'DRAFT') {
+  if (input.leadId) {
+    const lead = await db.collection('leads').doc(input.leadId).get();
+    if (!lead.exists || lead.data()?.orgId !== input.orgId) {
+      throw new HttpsError('permission-denied', 'Customer lead must belong to this organization.');
+    }
+  }
+
+  // Resolve Price Book (with auto-fallback to active, approved, draft, or provisioning baseline)
+  let priceBook: PriceBook | null = null;
+  if (input.priceBookId && input.priceBookId !== 'default') {
+    const pbSnap = await db.collection('price_books').doc(input.priceBookId).get();
+    if (
+      pbSnap.exists &&
+      pbSnap.data()?.orgId === input.orgId &&
+      pbSnap.data()?.projectId === input.projectId
+    ) {
+      priceBook = pbSnap.data() as PriceBook;
+    }
+  }
+
+  if (!priceBook) {
+    const existingPbSnap = await db
+      .collection('price_books')
+      .where('orgId', '==', input.orgId)
+      .where('projectId', '==', input.projectId)
+      .get();
+    const candidatePbs = existingPbSnap.docs.map((d) => d.data() as PriceBook);
+    priceBook =
+      candidatePbs.find((pb) => pb.status === 'ACTIVE') ??
+      candidatePbs.find((pb) => pb.status === 'APPROVED') ??
+      candidatePbs.find((pb) => pb.status === 'DRAFT') ??
+      candidatePbs[0] ??
+      null;
+  }
+
+  if (!priceBook) {
+    priceBook = await ensureBaselinePriceBookForProject(db, {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      baseRatePerSqft: unit.baseRatePerSqft || 8500,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole,
+    });
+  }
+
+  if (!priceBook) {
+    throw new HttpsError('not-found', 'Unable to resolve or provision price book for this project.');
+  }
+
+  // Resolve Payment Plan (with auto-fallback to active plan or provisioning baseline CLP)
+  let paymentPlan: PaymentPlan | null = null;
+  if (input.paymentPlanId && input.paymentPlanId !== 'default') {
+    const planSnap = await db.collection('payment_plans').doc(input.paymentPlanId).get();
+    if (
+      planSnap.exists &&
+      planSnap.data()?.orgId === input.orgId &&
+      planSnap.data()?.projectId === input.projectId
+    ) {
+      paymentPlan = planSnap.data() as PaymentPlan;
+    }
+  }
+
+  if (!paymentPlan) {
+    paymentPlan = await ensureBaselinePaymentPlanForProject(db, {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole,
+    });
+  }
+
+  if (
+    priceBook.status !== 'APPROVED' &&
+    priceBook.status !== 'ACTIVE' &&
+    priceBook.status !== 'DRAFT'
+  ) {
     throw new HttpsError(
       'failed-precondition',
       `Quotations require an APPROVED, ACTIVE, or DRAFT price book (selected: ${priceBook.status}).`

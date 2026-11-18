@@ -481,33 +481,47 @@ export async function commitApprovedInventoryDraftService(
     let structOps = 0;
 
     if (isTowerBased && !targetTowerId && verifiedDraft.towerSpec.name) {
-      const code = (
-        verifiedDraft.towerSpec.code ||
-        verifiedDraft.towerSpec.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 6) ||
-        'T1'
-      ).toUpperCase();
-      targetTowerId = `${verifiedDraft.id}_tw_${sanitizeDocIdToken(code)}`;
-      targetTowerName = verifiedDraft.towerSpec.name.trim();
+      const existingTowers = await db
+        .collection('towers')
+        .where('orgId', '==', input.orgId)
+        .where('projectId', '==', project.id)
+        .get();
+      const existingMatch = existingTowers.docs.find(
+        (d) => (d.data() as Tower).name.trim().toLowerCase() === verifiedDraft.towerSpec.name.trim().toLowerCase()
+      );
 
-      const towerDoc: Tower = {
-        id: targetTowerId,
-        orgId: input.orgId,
-        projectId: project.id,
-        phaseId: verifiedDraft.phaseId ?? verifiedDraft.towerSpec.phaseId ?? null,
-        name: targetTowerName,
-        code,
-        towerType: verifiedDraft.towerSpec.towerType ?? 'TOWER',
-        totalFloors: verifiedDraft.towerSpec.totalFloors ?? distinctFloors.length,
-        basementLevels: verifiedDraft.towerSpec.basementLevels ?? 1,
-        podiumLevels: verifiedDraft.towerSpec.podiumLevels ?? 0,
-        unitsPerFloorTypical:
-          verifiedDraft.floorTemplates[0]?.unitsPerFloor ?? 4,
-        status: 'ACTIVE',
-        createdAt: nowIso,
-      };
-      structBatch.set(db.collection('towers').doc(targetTowerId), towerDoc);
-      createdTowerIds.push(targetTowerId);
-      structOps++;
+      if (existingMatch) {
+        targetTowerId = existingMatch.id;
+        targetTowerName = (existingMatch.data() as Tower).name;
+      } else {
+        const code = (
+          verifiedDraft.towerSpec.code ||
+          verifiedDraft.towerSpec.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 6) ||
+          'T1'
+        ).toUpperCase();
+        targetTowerId = `${verifiedDraft.id}_tw_${sanitizeDocIdToken(code)}`;
+        targetTowerName = verifiedDraft.towerSpec.name.trim();
+
+        const towerDoc: Tower = {
+          id: targetTowerId,
+          orgId: input.orgId,
+          projectId: project.id,
+          phaseId: verifiedDraft.phaseId ?? verifiedDraft.towerSpec.phaseId ?? null,
+          name: targetTowerName,
+          code,
+          towerType: verifiedDraft.towerSpec.towerType ?? 'TOWER',
+          totalFloors: verifiedDraft.towerSpec.totalFloors ?? distinctFloors.length,
+          basementLevels: verifiedDraft.towerSpec.basementLevels ?? 1,
+          podiumLevels: verifiedDraft.towerSpec.podiumLevels ?? 0,
+          unitsPerFloorTypical:
+            verifiedDraft.floorTemplates[0]?.unitsPerFloor ?? 4,
+          status: 'ACTIVE',
+          createdAt: nowIso,
+        };
+        structBatch.set(db.collection('towers').doc(targetTowerId), towerDoc);
+        createdTowerIds.push(targetTowerId);
+        structOps++;
+      }
     }
 
     const floorIdByNumber = new Map<number, string>();

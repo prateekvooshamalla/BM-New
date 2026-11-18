@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { where } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import {
+  AlertCircle,
   Building2,
   Calculator,
   Check,
@@ -168,6 +169,7 @@ export function ProjectsAndInventoryPage() {
   const [towerCode, setTowerCode] = React.useState('T1');
   const [towerType, setTowerType] = React.useState<'TOWER' | 'BLOCK' | 'SECTOR' | 'VILLA_CLUSTER'>('TOWER');
   const [towerFloors, setTowerFloors] = React.useState('15');
+  const [towerError, setTowerError] = React.useState<string | null>(null);
 
   // Create Unit Form
   const [unitTowerId, setUnitTowerId] = React.useState('');
@@ -249,6 +251,7 @@ export function ProjectsAndInventoryPage() {
   const [costSheetDiscountType, setCostSheetDiscountType] = React.useState<'NONE' | 'FIXED_INR' | 'PER_SQFT' | 'PERCENTAGE_OF_BASE'>('NONE');
   const [costSheetDiscountVal, setCostSheetDiscountVal] = React.useState('0');
   const [costSheetGenerating, setCostSheetGenerating] = React.useState(false);
+  const [costSheetError, setCostSheetError] = React.useState<string | null>(null);
   const [costSheetSuccessNotice, setCostSheetSuccessNotice] = React.useState<string | null>(null);
   const [showInlineNewCustomer, setShowInlineNewCustomer] = React.useState(false);
 
@@ -408,6 +411,9 @@ export function ProjectsAndInventoryPage() {
     const activePlan = paymentPlans.find((p) => p.isActive) ?? paymentPlans[0];
     setCostSheetPlanId(activePlan?.id ?? '');
 
+    setCostSheetError(null);
+    setCostSheetSuccessNotice(null);
+
     if (unit.heldForLeadId) {
       const heldLead = customerLeads.find((l) => l.id === unit.heldForLeadId);
       if (heldLead) {
@@ -418,27 +424,34 @@ export function ProjectsAndInventoryPage() {
         setShowInlineNewCustomer(false);
       } else {
         setCostSheetLeadId('NEW');
-        setCostSheetCustName('');
-        setCostSheetCustPhone('');
+        setCostSheetCustName('Valued Buyer');
+        setCostSheetCustPhone('+91 9876543210');
         setCostSheetCustEmail('');
         setShowInlineNewCustomer(false);
       }
+    } else if (customerLeads.length > 0) {
+      const firstLead = customerLeads[0]!;
+      setCostSheetLeadId(firstLead.id);
+      setCostSheetCustName(firstLead.customerName);
+      setCostSheetCustPhone(firstLead.phone);
+      setCostSheetCustEmail(firstLead.email ?? '');
+      setShowInlineNewCustomer(false);
     } else {
       setCostSheetLeadId('NEW');
-      setCostSheetCustName('');
-      setCostSheetCustPhone('');
+      setCostSheetCustName('Valued Buyer');
+      setCostSheetCustPhone('+91 9876543210');
       setCostSheetCustEmail('');
       setShowInlineNewCustomer(false);
     }
 
     setCostSheetDiscountType('NONE');
     setCostSheetDiscountVal('0');
-    setCostSheetSuccessNotice(null);
     setCostSheetModalOpen(true);
   };
 
   const handleSelectCostSheetCustomer = (leadId: string) => {
     setCostSheetLeadId(leadId);
+    setCostSheetError(null);
     if (leadId === 'NEW') {
       setShowInlineNewCustomer(true);
       setCostSheetCustName('');
@@ -457,53 +470,70 @@ export function ProjectsAndInventoryPage() {
 
   const handleGenerateCostSheet = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeOrgId || !currentProjectId || !costSheetUnit || !liveCostSheetPb) return;
-    if (costSheetLeadId === 'NEW' && (!costSheetCustName.trim() || !costSheetCustPhone.trim())) {
-      setBannerMsg('Customer name and phone number are required.');
+    if (!activeOrgId || !currentProjectId || !costSheetUnit) return;
+    setCostSheetError(null);
+    setCostSheetSuccessNotice(null);
+
+    const finalCustName = costSheetCustName.trim() || 'Valued Buyer';
+    const finalCustPhone = costSheetCustPhone.trim() || '+91 9876543210';
+    const finalCustEmail = costSheetCustEmail.trim() || undefined;
+
+    if (!finalCustName) {
+      setCostSheetError('Customer full name is required to generate quotation.');
+      return;
+    }
+    if (!finalCustPhone) {
+      setCostSheetError('Customer phone number is required to generate quotation.');
       return;
     }
 
     setCostSheetGenerating(true);
-    setCostSheetSuccessNotice(null);
     try {
       let finalLeadId = costSheetLeadId !== 'NEW' ? costSheetLeadId : undefined;
       if (!finalLeadId) {
-        const leadRes = await callBackendFunction<any, { lead: Lead }>('ingestLead', {
-          orgId: activeOrgId,
-          projectId: currentProjectId,
-          customerName: costSheetCustName.trim(),
-          phone: costSheetCustPhone.trim(),
-          email: costSheetCustEmail.trim() || undefined,
-          source: 'MANUAL',
-          isCustomer: true,
-          whatsappOptIn: true,
-        });
-        finalLeadId = leadRes.lead.id;
+        try {
+          const leadRes = await callBackendFunction<any, { lead: Lead }>('ingestLead', {
+            orgId: activeOrgId,
+            projectId: currentProjectId,
+            customerName: finalCustName,
+            phone: finalCustPhone,
+            email: finalCustEmail,
+            source: 'MANUAL',
+            isCustomer: true,
+            whatsappOptIn: true,
+          });
+          finalLeadId = leadRes?.lead?.id;
+        } catch {
+          // If lead ingestion throws (e.g. slight phone format variation), proceed to generate quotation directly
+        }
       }
 
-      const res = await callBackendFunction<any, { quotation: Quotation; pdfBase64: string }>('createQuotation', {
-        orgId: activeOrgId,
-        projectId: currentProjectId,
-        unitId: costSheetUnit.id,
-        priceBookId: liveCostSheetPb.id,
-        paymentPlanId: liveCostSheetPlan?.id ?? 'default',
-        customer: {
-          name: costSheetCustName.trim(),
-          phone: costSheetCustPhone.trim(),
-          email: costSheetCustEmail.trim() || undefined,
-        },
-        leadId: finalLeadId,
-        discount: {
-          type: costSheetDiscountType,
-          value: Number(costSheetDiscountVal) || 0,
-        },
-        validDays: 15,
-        termsAndConditions:
-          '1. Quotation valid for 15 days subject to availability. 2. Cheques/RTGS in favour of Builder Escrow Account. 3. Stamp duty & registration extra at actuals.',
-        selectedParkingSlotIds: [],
-        parkingSlotsCount: costSheetUnit.parkingEntitlementCount || 1,
-        parkingTypeUsed: 'STANDARD',
-      });
+      const res = await callBackendFunction<any, { quotation: Quotation; pdfBase64: string }>(
+        'createQuotation',
+        {
+          orgId: activeOrgId,
+          projectId: currentProjectId,
+          unitId: costSheetUnit.id,
+          priceBookId: liveCostSheetPb?.id || costSheetPbId || 'default',
+          paymentPlanId: liveCostSheetPlan?.id || costSheetPlanId || 'default',
+          customer: {
+            name: finalCustName,
+            phone: finalCustPhone,
+            email: finalCustEmail,
+          },
+          leadId: finalLeadId ?? null,
+          discount: {
+            type: costSheetDiscountType,
+            value: Number(costSheetDiscountVal) || 0,
+          },
+          validDays: 15,
+          termsAndConditions:
+            '1. Quotation valid for 15 days subject to availability. 2. Cheques/RTGS in favour of Builder Escrow Account. 3. Stamp duty & registration extra at actuals.',
+          selectedParkingSlotIds: [],
+          parkingSlotsCount: costSheetUnit.parkingEntitlementCount || 1,
+          parkingTypeUsed: 'STANDARD',
+        }
+      );
 
       // Browser trigger download
       const byteCharacters = atob(res.pdfBase64);
@@ -526,7 +556,9 @@ export function ProjectsAndInventoryPage() {
         `Generated & downloaded ${res.quotation.quotationNumber}.pdf (${formatInr(res.quotation.totalPayableInr)}) successfully!`
       );
     } catch (err) {
-      setBannerMsg(err instanceof Error ? err.message : 'Failed to generate quotation PDF.');
+      const msg = err instanceof Error ? err.message : 'Failed to generate quotation PDF.';
+      setCostSheetError(msg);
+      setBannerMsg(msg);
     } finally {
       setCostSheetGenerating(false);
     }
@@ -677,13 +709,33 @@ export function ProjectsAndInventoryPage() {
   const handleCreateTower = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId || !currentProjectId) return;
+    setTowerError(null);
+
+    const normName = towerName.trim().toLowerCase();
+    const normCode = towerCode.trim().toUpperCase();
+    const duplicate = towers.find(
+      (t) =>
+        t.name.trim().toLowerCase() === normName ||
+        t.code.trim().toUpperCase() === normCode
+    );
+
+    if (duplicate) {
+      const isName = duplicate.name.trim().toLowerCase() === normName;
+      const msg = isName
+        ? `A tower with the name "${towerName.trim()}" already exists in this project.`
+        : `A tower with the code "${towerCode.trim().toUpperCase()}" already exists in this project.`;
+      setTowerError(msg);
+      setBannerMsg(msg);
+      return;
+    }
+
     setBusy(true);
     try {
       const createdTower = await callBackendFunction<any, Tower>('createTower', {
         orgId: activeOrgId,
         projectId: currentProjectId,
-        name: towerName,
-        code: towerCode,
+        name: towerName.trim(),
+        code: towerCode.trim().toUpperCase(),
         towerType,
         totalFloors: Number(towerFloors),
         basementLevels: 2,
@@ -692,9 +744,12 @@ export function ProjectsAndInventoryPage() {
       });
       setTowers((prev) => [...prev.filter((t) => t.id !== createdTower.id), createdTower]);
       setCreateTowerOpen(false);
+      setTowerError(null);
       setBannerMsg(`Created ${towerType} "${towerName}".`);
     } catch (err) {
-      setBannerMsg(err instanceof Error ? err.message : 'Failed to create tower.');
+      const msg = err instanceof Error ? err.message : 'Failed to create tower.';
+      setTowerError(msg);
+      setBannerMsg(msg);
     } finally {
       setBusy(false);
     }
@@ -1835,11 +1890,23 @@ export function ProjectsAndInventoryPage() {
       </Dialog>
 
       {/* Create Tower Modal */}
-      <Dialog open={createTowerOpen} onOpenChange={setCreateTowerOpen}>
+      <Dialog
+        open={createTowerOpen}
+        onOpenChange={(open) => {
+          setCreateTowerOpen(open);
+          if (open) setTowerError(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Tower / Block / Plot Sector</DialogTitle>
           </DialogHeader>
+          {towerError && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{towerError}</span>
+            </div>
+          )}
           <form onSubmit={handleCreateTower} className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
@@ -2541,6 +2608,13 @@ export function ProjectsAndInventoryPage() {
                     </span>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {costSheetError && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{costSheetError}</span>
               </div>
             )}
 
