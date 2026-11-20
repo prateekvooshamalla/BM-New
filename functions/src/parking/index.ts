@@ -29,7 +29,17 @@ export async function createParkingSlotService(
 
   return db.runTransaction(async (tx) => {
     const slotRef = db.collection('parking_slots').doc(slotId);
-    const existing = await tx.get(slotRef);
+    const [existing, projectSnap, towerSnap] = await Promise.all([
+      tx.get(slotRef),
+      tx.get(db.collection('projects').doc(input.projectId)),
+      input.towerId ? tx.get(db.collection('towers').doc(input.towerId)) : Promise.resolve(null),
+    ]);
+    if (!projectSnap.exists || projectSnap.data()?.orgId !== input.orgId) {
+      throw new HttpsError('not-found', 'Project not found.');
+    }
+    if (towerSnap && (!towerSnap.exists || towerSnap.data()?.orgId !== input.orgId || towerSnap.data()?.projectId !== input.projectId)) {
+      throw new HttpsError('invalid-argument', 'Tower must belong to this project.');
+    }
     if (existing.exists) {
       throw new HttpsError(
         'already-exists',
@@ -83,7 +93,7 @@ export async function createParkingSlotService(
  * Enforces:
  * 1. Physical slot is currently AVAILABLE (prevents conflicting allocations).
  * 2. Unit's assigned physical slots do not exceed its `parkingEntitlementCount`
- *    unless explicitly authorized with extra slot purchase reason.
+ *    (extra purchases must first increase the unit entitlement).
  */
 export async function allocateParkingSlotService(
   db: Firestore,
@@ -109,7 +119,7 @@ export async function allocateParkingSlotService(
     const slot = slotSnap.data() as ParkingSlot;
     const unit = unitSnap.data() as Unit;
 
-    if (slot.projectId !== unit.projectId) {
+    if (slot.projectId !== input.projectId || unit.projectId !== input.projectId) {
       throw new HttpsError(
         'invalid-argument',
         'Parking slot and unit must belong to the same project.'
@@ -123,16 +133,30 @@ export async function allocateParkingSlotService(
       );
     }
 
+    if (slot.towerId && slot.towerId !== unit.towerId) {
+      throw new HttpsError('invalid-argument', 'Parking slot is restricted to its tower.');
+    }
+    if ((unit.assignedParkingSlotIds ?? []).length >= unit.parkingEntitlementCount) {
+      throw new HttpsError('failed-precondition', 'All entitled parking spaces are assigned. Update the unit parking entitlement before allocating another slot.');
+    }
+    const bookingId = input.bookingId ?? unit.activeBookingId ?? null;
+    if (bookingId) {
+      const booking = await tx.get(db.collection('bookings').doc(bookingId));
+      if (!booking.exists || booking.data()?.orgId !== input.orgId || booking.data()?.projectId !== input.projectId || booking.data()?.unitId !== unit.id) {
+        throw new HttpsError('invalid-argument', 'Booking must belong to the selected unit.');
+      }
+    }
+
     const updatedSlot: ParkingSlot = {
       ...slot,
       status: 'ALLOCATED',
       allocatedUnitId: unit.id,
       allocatedUnitNumber: unit.unitNumber,
-      allocatedBookingId: input.bookingId ?? unit.activeBookingId ?? null,
+      allocatedBookingId: bookingId,
       updatedAt: nowIso,
     };
 
-    const nextAssignedIds = Array.from(new Set([...unit.assignedParkingSlotIds, slot.id]));
+    const nextAssignedIds = Array.from(new Set([...(unit.assignedParkingSlotIds ?? []), slot.id]));
 
     const allocRef = db.collection('parking_allocations').doc();
     const allocation: ParkingAllocation = {
@@ -184,7 +208,7 @@ export async function releaseParkingSlotService(
   db: Firestore,
   actor: AuthenticatedActor,
   actorRole: string,
-  params: { orgId: string; slotId: string; reason: string }
+  params: { orgId: string; projectId: string; slotId: string; reason: string }
 ): Promise<ParkingSlot> {
   const nowIso = new Date().toISOString();
 
@@ -196,12 +220,18 @@ export async function releaseParkingSlotService(
     }
 
     const slot = slotSnap.data() as ParkingSlot;
+    if (slot.projectId !== params.projectId) {
+      throw new HttpsError('permission-denied', 'Parking slot must belong to this project.');
+    }
     if (slot.status !== 'ALLOCATED' || !slot.allocatedUnitId) {
       throw new HttpsError('failed-precondition', 'Parking slot is not currently allocated.');
     }
 
     const unitRef = db.collection('units').doc(slot.allocatedUnitId);
     const unitSnap = await tx.get(unitRef);
+    if (unitSnap.exists && (unitSnap.data()?.orgId !== params.orgId || unitSnap.data()?.projectId !== slot.projectId)) {
+      throw new HttpsError('permission-denied', 'Allocated unit must belong to this organization and project.');
+    }
 
     const updatedSlot: ParkingSlot = {
       ...slot,
@@ -216,7 +246,7 @@ export async function releaseParkingSlotService(
     if (unitSnap.exists) {
       const unit = unitSnap.data() as Unit;
       tx.update(unitRef, {
-        assignedParkingSlotIds: unit.assignedParkingSlotIds.filter((id) => id !== slot.id),
+        assignedParkingSlotIds: (unit.assignedParkingSlotIds ?? []).filter((id) => id !== slot.id),
         updatedAt: nowIso,
       });
     }
@@ -285,7 +315,14 @@ export async function swapParkingSlotsService(
     const tgt = tgtSnap.data() as ParkingSlot;
     const unit = unitSnap.data() as Unit;
 
-    if (cur.allocatedUnitId !== unit.id) {
+    if (cur.orgId !== input.orgId || tgt.orgId !== input.orgId || unit.orgId !== input.orgId ||
+        cur.projectId !== input.projectId || tgt.projectId !== input.projectId || unit.projectId !== input.projectId) {
+      throw new HttpsError('permission-denied', 'Unit and parking slots must belong to this organization and project.');
+    }
+    if (tgt.towerId && tgt.towerId !== unit.towerId) {
+      throw new HttpsError('invalid-argument', 'Target parking slot is restricted to its tower.');
+    }
+    if (cur.status !== 'ALLOCATED' || cur.allocatedUnitId !== unit.id) {
       throw new HttpsError('failed-precondition', 'Current slot does not belong to the specified unit.');
     }
     if (tgt.status !== 'AVAILABLE') {
@@ -310,7 +347,7 @@ export async function swapParkingSlotsService(
       updatedAt: nowIso,
     };
 
-    const nextSlotIds = unit.assignedParkingSlotIds
+    const nextSlotIds = (unit.assignedParkingSlotIds ?? [])
       .filter((id) => id !== cur.id)
       .concat(tgt.id);
 

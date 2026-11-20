@@ -41,6 +41,11 @@ const SLOT_TYPES: ParkingSlotType[] = ['STANDARD', 'TANDEM', 'MECHANICAL', 'EV',
 const LEVEL_TYPES: ParkingLevelType[] = ['BASEMENT', 'PODIUM', 'SURFACE', 'STILT'];
 
 export function ParkingPage() {
+  const { activeOrgId, activeProjectId, projects } = useTenantStore();
+  return <ProjectParkingWorkspace key={`${activeOrgId}:${activeProjectId ?? projects[0]?.id ?? ''}`} />;
+}
+
+function ProjectParkingWorkspace() {
   const { activeOrgId, projects, activeProjectId, selectProject } = useTenantStore();
   const currentProjectId = activeProjectId ?? projects[0]?.id ?? null;
 
@@ -144,7 +149,7 @@ export function ParkingPage() {
       });
       setAllocateTargetSlot(null);
       setSelectedUnitId('');
-      setBanner('Parking slot allocated transactionally.');
+      setBanner('Parking slot assigned.');
     } catch (err) {
       setBanner(err instanceof Error ? err.message : 'Allocation failed.');
     } finally {
@@ -193,7 +198,7 @@ export function ParkingPage() {
       setSwapSourceSlot(null);
       setSwapTargetSlotId('');
       setSwapReason('');
-      setBanner('Parking slots swapped atomically.');
+      setBanner('Parking slot changed.');
     } catch (err) {
       setBanner(err instanceof Error ? err.message : 'Swap failed.');
     } finally {
@@ -212,15 +217,19 @@ export function ParkingPage() {
   }
 
   const availableSlots = slots.filter((s) => s.status === 'AVAILABLE');
+  const allocatableUnits = units.filter((unit) =>
+    (unit.assignedParkingSlotIds ?? []).length < unit.parkingEntitlementCount
+    && (!allocateTargetSlot?.towerId || unit.towerId === allocateTargetSlot.towerId)
+  );
 
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Independent Physical Inventory"
-        title="Parking Management"
-        description="Distinguish unit parking entitlements from physical basement/podium slot allocations with conflict-free swaps."
+        eyebrow="Project Parking"
+        title="Parking"
+        description="Manage parking spaces, assign them to units, and track changes."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               value={currentProjectId ?? ''}
               onValueChange={(val) => selectProject(val)}
@@ -252,7 +261,7 @@ export function ParkingPage() {
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-xs text-muted-foreground">Total Physical Slots</CardTitle>
@@ -292,9 +301,9 @@ export function ParkingPage() {
       </div>
 
       <Tabs defaultValue="slots">
-        <TabsList>
+        <TabsList className="h-auto max-w-full flex-wrap gap-1">
           <TabsTrigger value="slots">Physical Slots ({slots.length})</TabsTrigger>
-          <TabsTrigger value="entitlements">Unit Entitlement vs Allocation ({units.length})</TabsTrigger>
+          <TabsTrigger value="entitlements">Unit Entitlements ({units.length})</TabsTrigger>
           <TabsTrigger value="history">Allocation History ({allocations.length})</TabsTrigger>
         </TabsList>
 
@@ -314,6 +323,7 @@ export function ParkingPage() {
               columns={[
                 {
                   id: 'slotCode',
+                  accessorFn: (slot) => `${slot.levelName}-${slot.slotNumber}`,
                   header: 'Slot Code',
                   cell: ({ row }) => (
                     <span className="font-semibold">
@@ -498,7 +508,7 @@ export function ParkingPage() {
               </div>
               <div className="space-y-1">
                 <Label>Slot Price (INR) *</Label>
-                <Input required type="number" value={priceInr} onChange={(e) => setPriceInr(e.target.value)} />
+                <Input required type="number" min={0} step="any" value={priceInr} onChange={(e) => setPriceInr(e.target.value)} />
               </div>
             </div>
             <DialogFooter>
@@ -518,6 +528,11 @@ export function ParkingPage() {
             <DialogTitle>
               Allocate Slot {allocateTargetSlot?.levelName}-{allocateTargetSlot?.slotNumber}
             </DialogTitle>
+            <DialogDescription>
+              {allocatableUnits.length > 0
+                ? 'Choose a unit with an unassigned parking entitlement.'
+                : 'No units have remaining parking entitlement. Update the unit entitlement in Inventory before assigning another slot.'}
+            </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleAllocate} className="space-y-3">
             <div className="space-y-1">
@@ -525,7 +540,7 @@ export function ParkingPage() {
               <Select value={selectedUnitId} onValueChange={setSelectedUnitId}>
                 <SelectTrigger><SelectValue placeholder="Choose unit" /></SelectTrigger>
                 <SelectContent>
-                  {units.map((u) => (
+                  {allocatableUnits.map((u) => (
                     <SelectItem key={u.id} value={u.id}>
                       {u.unitNumber} ({u.assignedParkingSlotIds.length}/{u.parkingEntitlementCount}{' '}
                       assigned)
@@ -536,7 +551,7 @@ export function ParkingPage() {
             </div>
             <div className="space-y-1">
               <Label>Reason *</Label>
-              <Input required value={allocReason} onChange={(e) => setAllocReason(e.target.value)} />
+              <Input required minLength={2} value={allocReason} onChange={(e) => setAllocReason(e.target.value)} />
             </div>
             <DialogFooter>
               <Button type="submit" disabled={busy || !selectedUnitId}>
@@ -580,8 +595,8 @@ export function ParkingPage() {
               />
             </div>
             <DialogFooter>
-              <Button type="submit" disabled={busy || !swapTargetSlotId}>
-                Execute Atomic Swap
+              <Button type="submit" disabled={busy || !swapTargetSlotId || swapReason.trim().length < 3}>
+                Change Parking Slot
               </Button>
             </DialogFooter>
           </form>

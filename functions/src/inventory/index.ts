@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -17,6 +18,7 @@ import {
   updateUnitSchema,
   unitStatusTransitionSchema,
   unitTypeSchema,
+  unitRoomFields,
 } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
@@ -47,12 +49,19 @@ export async function createUnitService(
   rawInput: unknown
 ): Promise<Unit> {
   const input = createUnitSchema.parse(rawInput);
+  const unitRef = input.requestId
+    ? db.collection('units').doc(createHash('sha256').update(`${input.orgId}:${input.projectId}:${actor.uid}:${input.requestId}`).digest('hex').slice(0, 32))
+    : db.collection('units').doc();
   if (input.floorPlanStoragePath && !input.floorPlanStoragePath.startsWith(`organizations/${input.orgId}/projects/${input.projectId}/floorplans/`)) {
     throw new HttpsError('invalid-argument', 'Floor plan must belong to this project.');
   }
   const nowIso = new Date().toISOString();
 
   const createdUnit = await db.runTransaction(async (tx) => {
+    if (input.requestId) {
+      const existing = await tx.get(unitRef);
+      if (existing.exists) return existing.data() as Unit;
+    }
     const projRef = db.collection('projects').doc(input.projectId);
     const projSnap = await tx.get(projRef);
     if (!projSnap.exists || projSnap.data()?.orgId !== input.orgId) {
@@ -95,7 +104,26 @@ export async function createUnitService(
       }
     }
 
-    if (input.towerId && input.floorNumber > 0) {
+    for (const [collection, id, label] of [
+      ['project_phases', input.phaseId, 'Phase'],
+      ['towers', input.towerId, 'Tower'],
+      ['floors', input.floorId, 'Floor'],
+    ] as const) {
+      if (!id) continue;
+      const parent = await tx.get(db.collection(collection).doc(id));
+      const data = parent.data();
+      if (!parent.exists || data?.orgId !== input.orgId || data?.projectId !== input.projectId) {
+        throw new HttpsError('invalid-argument', `${label} must belong to this project.`);
+      }
+      if (collection === 'floors' && ((data?.towerId ?? null) !== (input.towerId ?? null) || data?.floorNumber !== input.floorNumber)) {
+        throw new HttpsError('invalid-argument', 'Floor must match the selected tower and floor number.');
+      }
+      if (collection === 'towers' && input.phaseId && data?.phaseId !== input.phaseId) {
+        throw new HttpsError('invalid-argument', 'Tower must belong to the selected phase.');
+      }
+    }
+
+    if (input.towerId) {
       const towerSnap = await tx.get(db.collection('towers').doc(input.towerId));
       if (towerSnap.exists) {
         const towerData = towerSnap.data() as Tower;
@@ -117,7 +145,6 @@ export async function createUnitService(
       pricingMode === 'BASE_UNIT_PRICE'
         ? Math.round((input.baseUnitPrice ?? primaryArea * input.baseRatePerSqft) * 100) / 100
         : Math.round(primaryArea * input.baseRatePerSqft * 100) / 100;
-    const unitRef = db.collection('units').doc();
 
     const unit: Unit = {
       id: unitRef.id,
@@ -144,6 +171,11 @@ export async function createUnitService(
       viewType: input.viewType,
       isCorner: input.isCorner,
       balconiesCount: input.balconiesCount,
+      bedroomsCount: input.bedroomsCount,
+      bathroomsCount: input.bathroomsCount,
+      furnishing: input.furnishing,
+      roomDetails: input.roomDetails ?? [],
+      unitAmenities: input.unitAmenities ?? [],
       parkingEntitlementCount: input.parkingEntitlementCount,
       assignedParkingSlotIds: [],
       pricingMode,
@@ -270,6 +302,10 @@ export async function updateUnitService(
       }
     }
 
+    if (input.parkingEntitlementCount !== undefined && input.parkingEntitlementCount < (unit.assignedParkingSlotIds ?? []).length) {
+      throw new HttpsError('failed-precondition', 'Release assigned parking slots before reducing the unit entitlement.');
+    }
+
     // Check duplicate series on same floor/tower if changed
     if (nextSeries && (input.series || input.floorNumber !== undefined)) {
       let seriesQuery = db
@@ -325,6 +361,12 @@ export async function updateUnitService(
       series: nextSeries,
       floorNumber: nextFloor,
       bhk: input.bhk ? input.bhk.trim() : unit.bhk,
+      balconiesCount: input.balconiesCount ?? unit.balconiesCount,
+      bedroomsCount: input.bedroomsCount ?? unit.bedroomsCount,
+      bathroomsCount: input.bathroomsCount ?? unit.bathroomsCount,
+      furnishing: input.furnishing ?? unit.furnishing,
+      roomDetails: input.roomDetails ?? unit.roomDetails ?? [],
+      unitAmenities: input.unitAmenities ?? unit.unitAmenities ?? [],
       unitType: input.unitType ?? unit.unitType,
       facing: input.facing ?? unit.facing,
       saleableAreaSqft: nextSaleable,
@@ -555,6 +597,8 @@ export const updateUnit = onCall(async (request) => {
 });
 
 const bulkGenerateUnitsSchema = z.object({
+  ...unitRoomFields,
+  balconiesCount: z.coerce.number().int().min(0).max(20).optional(),
   orgId: z.string().min(1),
   projectId: z.string().min(1),
   towerId: z.string().nullable().optional(),
@@ -636,6 +680,11 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
             unitNumber: flatNo,
             unitType: input.unitType,
             bhk: input.bhk,
+            bedroomsCount: input.bedroomsCount,
+            bathroomsCount: input.bathroomsCount,
+            furnishing: input.furnishing,
+            roomDetails: input.roomDetails,
+            unitAmenities: input.unitAmenities,
             saleableAreaSqft: input.saleableAreaSqft,
             carpetAreaSqft: input.carpetAreaSqft,
             facing: input.facing,
@@ -643,7 +692,7 @@ export async function bulkGenerateTowerUnitsService(db: Firestore, actor: Authen
               input.isCorner !== undefined
                 ? input.isCorner
                 : idx === input.startUnitNumber || idx === input.startUnitNumber + input.unitsPerFloor - 1,
-            balconiesCount: input.unitType === 'PLOT' ? 0 : 2,
+            balconiesCount: input.balconiesCount ?? (input.unitType === 'PLOT' ? 0 : 2),
             parkingEntitlementCount: input.parkingEntitlementCount,
             baseRatePerSqft: input.baseRatePerSqft,
             floorPlanStoragePath: input.floorPlanStoragePath,

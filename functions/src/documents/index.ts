@@ -21,7 +21,9 @@ export async function registerDocumentService(
 ): Promise<DocumentRecord> {
   const input = registerDocumentMetadataSchema.parse(rawInput);
   const nowIso = new Date().toISOString();
-  const ref = db.collection('documents').doc();
+  const ref = input.requestId
+    ? db.collection('documents').doc(crypto.createHash('sha256').update(`${input.orgId}:${actor.uid}:${input.requestId}`).digest('hex').slice(0, 32))
+    : db.collection('documents').doc();
 
   const docRecord: DocumentRecord = {
     id: ref.id,
@@ -54,20 +56,36 @@ export async function registerDocumentService(
     updatedAt: nowIso,
   };
 
-  await ref.set(docRecord);
-  await writeAuditEvent(db, {
-    orgId: input.orgId,
-    actorUid: actor.uid,
-    actorEmail: actor.email,
-    actorRole,
-    action: 'DOCUMENT_UPLOADED',
-    category: 'DOCUMENT',
-    entityType: 'document',
-    entityId: docRecord.id,
-    summary: `Uploaded ${docRecord.category} "${docRecord.title}" (v1).`,
+  return db.runTransaction(async (tx) => {
+    const existing = await tx.get(ref);
+    if (existing.exists) return existing.data() as DocumentRecord;
+    const projectRef = input.projectId ? db.collection('projects').doc(input.projectId) : null;
+    if (projectRef) {
+      const project = await tx.get(projectRef);
+      if (!project.exists || project.data()?.orgId !== input.orgId) {
+        throw new HttpsError('invalid-argument', 'Document project must belong to this organization.');
+      }
+    }
+    if (input.category === 'MASTER_PLAN') {
+      if (!projectRef || !input.storagePath.startsWith(`organizations/${input.orgId}/projects/${input.projectId}/`)) {
+        throw new HttpsError('invalid-argument', 'Project plan must be uploaded to this project.');
+      }
+      tx.update(projectRef, { masterPlanDocumentId: docRecord.id, updatedAt: nowIso });
+    }
+    tx.set(ref, docRecord);
+    await writeAuditEvent(db, {
+      orgId: input.orgId,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole,
+      action: 'DOCUMENT_UPLOADED',
+      category: 'DOCUMENT',
+      entityType: 'document',
+      entityId: docRecord.id,
+      summary: `Uploaded ${docRecord.category} "${docRecord.title}" (v1).`,
+    }, tx);
+    return docRecord;
   });
-
-  return docRecord;
 }
 
 export async function replaceDocumentVersionService(

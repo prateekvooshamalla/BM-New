@@ -4,6 +4,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { z } from 'zod';
 import {
   calculateCostSheet,
+  getQuotationPriceBooks,
   computeSftRateBreakup,
   formatArea,
   formatCurrency,
@@ -193,7 +194,7 @@ export async function generateQuotationPdfBytes(params: {
     );
     y -= 13;
     page.drawText(
-      `Layout Ref: ${unit.floorPlanVersionId ?? 'Approved Layout'} | Parking: ${quotation.parkingSlotsCount} (${quotation.parkingTypeUsed}) | Price Book v${quotation.priceBookVersion}`,
+      `Layout Ref: ${unit.floorPlanVersionId ?? 'Approved Layout'} | Parking: ${quotation.parkingSlotsCount} (${quotation.selectedParkingSlotIds.length > 0 ? 'Assigned slots' : quotation.parkingTypeUsed}) | Price Book v${quotation.priceBookVersion}`,
       { x: 36, y, size: 8, font: fontRegular, color: rgb(0.35, 0.4, 0.45) }
     );
     y -= 20;
@@ -569,6 +570,10 @@ export async function createPaymentPlanService(
   rawInput: unknown
 ): Promise<PaymentPlan> {
   const input = paymentPlanSchema.parse(rawInput);
+  const project = await db.collection('projects').doc(input.projectId).get();
+  if (!project.exists || project.data()?.orgId !== input.orgId) {
+    throw new HttpsError('not-found', 'Project not found.');
+  }
   const nowIso = new Date().toISOString();
   const totalPct =
     Math.round(input.milestones.reduce((acc, m) => acc + m.percentage, 0) * 10000) / 10000;
@@ -627,8 +632,7 @@ export async function ensureBaselinePaymentPlanForProject(
   const activePlan =
     existingSnap.docs
       .map((d) => d.data() as PaymentPlan)
-      .find((p) => p.isActive) ??
-    (existingSnap.docs[0]?.data() as PaymentPlan | undefined);
+      .find((p) => p.isActive);
 
   if (activePlan) {
     return activePlan;
@@ -743,13 +747,10 @@ export async function createQuotationService(
   let priceBook: PriceBook | null = null;
   if (input.priceBookId && input.priceBookId !== 'default') {
     const pbSnap = await db.collection('price_books').doc(input.priceBookId).get();
-    if (
-      pbSnap.exists &&
-      pbSnap.data()?.orgId === input.orgId &&
-      pbSnap.data()?.projectId === input.projectId
-    ) {
-      priceBook = pbSnap.data() as PriceBook;
+    if (!pbSnap.exists || pbSnap.data()?.orgId !== input.orgId || pbSnap.data()?.projectId !== input.projectId) {
+      throw new HttpsError('invalid-argument', 'Selected price book must belong to this project.');
     }
+    priceBook = pbSnap.data() as PriceBook;
   }
 
   if (!priceBook) {
@@ -759,12 +760,10 @@ export async function createQuotationService(
       .where('projectId', '==', input.projectId)
       .get();
     const candidatePbs = existingPbSnap.docs.map((d) => d.data() as PriceBook);
-    priceBook =
-      candidatePbs.find((pb) => pb.status === 'ACTIVE') ??
-      candidatePbs.find((pb) => pb.status === 'APPROVED') ??
-      candidatePbs.find((pb) => pb.status === 'DRAFT') ??
-      candidatePbs[0] ??
-      null;
+    priceBook = getQuotationPriceBooks(candidatePbs)[0] ?? null;
+    if (!priceBook && candidatePbs.length > 0) {
+      throw new HttpsError('failed-precondition', 'Create a draft or activate a price book before generating a cost sheet.');
+    }
   }
 
   if (!priceBook) {
@@ -786,12 +785,12 @@ export async function createQuotationService(
   let paymentPlan: PaymentPlan | null = null;
   if (input.paymentPlanId && input.paymentPlanId !== 'default') {
     const planSnap = await db.collection('payment_plans').doc(input.paymentPlanId).get();
-    if (
-      planSnap.exists &&
-      planSnap.data()?.orgId === input.orgId &&
-      planSnap.data()?.projectId === input.projectId
-    ) {
-      paymentPlan = planSnap.data() as PaymentPlan;
+    if (!planSnap.exists || planSnap.data()?.orgId !== input.orgId || planSnap.data()?.projectId !== input.projectId) {
+      throw new HttpsError('invalid-argument', 'Selected payment plan must belong to this project.');
+    }
+    paymentPlan = planSnap.data() as PaymentPlan;
+    if (!paymentPlan.isActive) {
+      throw new HttpsError('failed-precondition', 'Selected payment plan is inactive.');
     }
   }
 
@@ -838,15 +837,27 @@ export async function createQuotationService(
       null;
   }
 
-  let allocatedSlots: ParkingSlot[] = [];
-  if (input.selectedParkingSlotIds.length > 0) {
-    const slotSnaps = await Promise.all(
-      input.selectedParkingSlotIds.map((id) => db.collection('parking_slots').doc(id).get())
-    );
-    allocatedSlots = slotSnaps
-      .filter((s) => s.exists && s.data()?.orgId === input.orgId)
-      .map((s) => s.data() as ParkingSlot);
+  const selectedSlotIds = input.selectedParkingSlotIds.length > 0
+    ? input.selectedParkingSlotIds
+    : (unit.assignedParkingSlotIds ?? []);
+  if (new Set(selectedSlotIds).size !== selectedSlotIds.length) {
+    throw new HttpsError('invalid-argument', 'Select each parking slot only once.');
   }
+  const slotSnaps = await Promise.all(
+    selectedSlotIds.map((id) => db.collection('parking_slots').doc(id).get())
+  );
+  const allocatedSlots: ParkingSlot[] = slotSnaps.map((snap) => {
+    const slot = snap.data() as ParkingSlot | undefined;
+    if (!slot || slot.orgId !== input.orgId || slot.projectId !== input.projectId ||
+        (slot.towerId && slot.towerId !== unit.towerId)) {
+      throw new HttpsError('invalid-argument', 'Selected parking slots must belong to this project and tower.');
+    }
+    if ((slot.status !== 'AVAILABLE' && slot.status !== 'ALLOCATED') ||
+        (slot.allocatedUnitId && slot.allocatedUnitId !== unit.id)) {
+      throw new HttpsError('failed-precondition', 'Selected parking slot is unavailable or allocated to another unit.');
+    }
+    return slot;
+  });
 
   const overrides = overridesSnap.docs.map((d) => d.data() as PricingScopeOverride);
 
@@ -909,7 +920,7 @@ export async function createQuotationService(
     priceBookId: priceBook.id,
     priceBookVersion: priceBook.versionNumber,
     paymentPlanId: paymentPlan.id,
-    selectedParkingSlotIds: input.selectedParkingSlotIds,
+    selectedParkingSlotIds: selectedSlotIds,
     parkingSlotsCount:
       allocatedSlots.length > 0 ? allocatedSlots.length : input.parkingSlotsCount,
     parkingTypeUsed: input.parkingTypeUsed,

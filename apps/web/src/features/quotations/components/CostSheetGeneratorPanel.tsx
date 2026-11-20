@@ -12,13 +12,13 @@ import {
 } from 'lucide-react';
 import {
   calculateCostSheet,
+  getQuotationPriceBooks,
   computeSftRateBreakup,
   formatAreaSqft,
   formatInr,
   formatLineItemCalculation,
   validatePaymentPlanPercentages,
   type ApprovalRequest,
-  type ParkingSlot,
   type PaymentPlan,
   type PaymentPlanMilestone,
   type PriceBook,
@@ -27,6 +27,7 @@ import {
   type Unit,
   type Lead,
 } from '@bharat-makaan/shared';
+import { useProjectPricingContext } from '@/features/pricing/hooks/useProjectPricingContext';
 import { callBackendFunction } from '@/lib/firebase';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
@@ -75,17 +76,17 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
   const [units, setUnits] = React.useState<Unit[]>([]);
   const [priceBooks, setPriceBooks] = React.useState<PriceBook[]>([]);
   const [paymentPlans, setPaymentPlans] = React.useState<PaymentPlan[]>([]);
-  const [parkingSlots, setParkingSlots] = React.useState<ParkingSlot[]>([]);
+  const { parkingSlots, pricingOverrides } = useProjectPricingContext(projectId);
   const [quotations, setQuotations] = React.useState<Quotation[]>([]);
   const [discountApprovals, setDiscountApprovals] = React.useState<ApprovalRequest[]>([]);
 
-  // 15-Step Quotation Builder Selection State
+  // Project-scoped quotation selections
   const [towerFilter, setTowerFilter] = React.useState<string>('ALL');
   const [floorFilter, setFloorFilter] = React.useState<string>('ALL');
   const [selectedUnitId, setSelectedUnitId] = React.useState<string>(initialUnitId);
   const [selectedPbId, setSelectedPbId] = React.useState<string>('');
   const [selectedPlanId, setSelectedPlanId] = React.useState<string>('');
-  const [parkingCount, setParkingCount] = React.useState<string>('2');
+  const [parkingCount, setParkingCount] = React.useState<string>('0');
   const [parkingType, setParkingType] = React.useState<'STANDARD' | 'TANDEM' | 'MECHANICAL' | 'EV' | 'ACCESSIBLE'>('STANDARD');
   const [discountType, setDiscountType] = React.useState<'NONE' | 'FIXED_INR' | 'PER_SQFT' | 'PERCENTAGE_OF_BASE'>('NONE');
   const [discountValue, setDiscountValue] = React.useState<string>('0');
@@ -128,17 +129,17 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
       projectId,
       onData: (list) => {
         setUnits(list);
-        if (!selectedUnitId && list[0]) setSelectedUnitId(list[0].id);
+        setSelectedUnitId((previous) => list.some((unit) => unit.id === previous) ? previous : (list[0]?.id ?? ''));
       },
     });
     const u3 = subscribeTenantCollection<PriceBook>({
       orgId: activeOrgId,
       collectionName: 'price_books',
       projectId,
-      filter: (b) => b.status === 'ACTIVE' || b.status === 'APPROVED',
-      onData: (approved) => {
-        setPriceBooks(approved);
-        if (!selectedPbId && approved[0]) setSelectedPbId(approved[0].id);
+      onData: (list) => {
+        const books = getQuotationPriceBooks(list);
+        setPriceBooks(books);
+        setSelectedPbId((previous) => books.some((book) => book.id === previous) ? previous : (books[0]?.id ?? ''));
       },
     });
     const u4 = subscribeTenantCollection<PaymentPlan>({
@@ -146,15 +147,10 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
       collectionName: 'payment_plans',
       projectId,
       onData: (list) => {
-        setPaymentPlans(list);
-        if (!selectedPlanId && list[0]) setSelectedPlanId(list[0].id);
+        const active = list.filter((plan) => plan.isActive);
+        setPaymentPlans(active);
+        setSelectedPlanId((previous) => active.some((plan) => plan.id === previous) ? previous : (active[0]?.id ?? ''));
       },
-    });
-    const u5 = subscribeTenantCollection<ParkingSlot>({
-      orgId: activeOrgId,
-      collectionName: 'parking_slots',
-      projectId,
-      onData: setParkingSlots,
     });
     const u6 = subscribeTenantCollection<Quotation>({
       orgId: activeOrgId,
@@ -170,7 +166,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
         where('entityType', '==', 'QUOTATION_DISCOUNT'),
         where('status', '==', 'PENDING'),
       ],
-      filter: (a) => a.entityType === 'QUOTATION_DISCOUNT' && a.status === 'PENDING',
+      filter: (a) => a.projectId === projectId && a.entityType === 'QUOTATION_DISCOUNT' && a.status === 'PENDING',
       onData: setDiscountApprovals,
     });
 
@@ -179,7 +175,6 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
       u2();
       u3();
       u4();
-      u5();
       u6();
       u7();
     };
@@ -196,14 +191,24 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
   const selectedUnit = units.find((u) => u.id === selectedUnitId) ?? null;
   const selectedPb = priceBooks.find((b) => b.id === selectedPbId) ?? null;
   const selectedPlan = paymentPlans.find((p) => p.id === selectedPlanId) ?? null;
+  const assignedPhysical = parkingSlots.filter((slot) => slot.status === 'ALLOCATED' && slot.allocatedUnitId === selectedUnitId);
+
+  React.useEffect(() => {
+    if (units.length === 0) return;
+    setSelectedUnitId((previous) => selectableUnits.some((unit) => unit.id === previous) ? previous : (selectableUnits[0]?.id ?? ''));
+  }, [selectableUnits, units.length]);
+  React.useEffect(() => {
+    setParkingCount(String(selectedUnit?.parkingEntitlementCount ?? 0));
+  }, [selectedUnit?.id, selectedUnit?.parkingEntitlementCount]);
 
   const liveBreakdown = React.useMemo(() => {
     if (!selectedUnit || !selectedPb) return null;
     try {
-      const assignedPhysical = parkingSlots.filter((s) => s.allocatedUnitId === selectedUnit.id);
+      const assignedPhysical = parkingSlots.filter((slot) => slot.status === 'ALLOCATED' && slot.allocatedUnitId === selectedUnit.id);
       return calculateCostSheet({
         unit: selectedUnit,
         priceBook: selectedPb,
+        overrides: pricingOverrides,
         paymentPlan: selectedPlan,
         allocatedParkingSlots: assignedPhysical.length > 0 ? assignedPhysical : undefined,
         fallbackParkingCount: Number(parkingCount) || 0,
@@ -221,6 +226,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
     selectedPb,
     selectedPlan,
     parkingSlots,
+    pricingOverrides,
     parkingCount,
     parkingType,
     discountType,
@@ -262,7 +268,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
 
   const handleGenerateQuotation = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeOrgId || !selectedUnit || !selectedPb || !selectedPlan) return;
+    if (!activeOrgId || !selectedUnit || !selectedPb || !selectedPlan || !liveBreakdown) return;
     setBusy(true);
     setBanner(null);
     try {
@@ -290,7 +296,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
           phone: custPhone,
           email: custEmail,
         },
-        selectedParkingSlotIds: selectedUnit.assignedParkingSlotIds,
+        selectedParkingSlotIds: assignedPhysical.map((slot) => slot.id),
         parkingSlotsCount: Number(parkingCount) || 0,
         parkingTypeUsed: parkingType,
         discount: {
@@ -428,35 +434,37 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
         </PermissionGate>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm font-semibold">
-          Payment Schedules ({paymentPlans.length}) & 15-Step Quotation Builder
+          Cost Sheet Builder
         </div>
-        <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          New CLP / Payment Plan
-        </Button>
+        <PermissionGate permission="pricing:edit_draft" projectId={projectId}>
+          <Button variant="outline" size="sm" onClick={() => setPlanModalOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New Payment Plan
+          </Button>
+        </PermissionGate>
       </div>
 
       {priceBooks.length === 0 ? (
         <EmptyState
           icon={FileSpreadsheet}
-          title="No approved price book. Create your pricing rules."
-          description="Approve and activate at least one Price Book in the first tab before generating customer cost sheets."
+          title="Add pricing before creating a cost sheet"
+          description="Create a price book in the Price Books tab. Draft, approved, and active versions can be used for cost sheets."
         />
       ) : (
         <div className="grid gap-6 lg:grid-cols-12">
           {/* Left: Configuration Form */}
           <Card className="lg:col-span-5">
             <CardHeader>
-              <CardTitle className="text-sm">Configure Cost Sheet Parameters</CardTitle>
+              <CardTitle className="text-sm">Unit & Customer Details</CardTitle>
               <CardDescription>
-                Select tower, floor, unit, approved price book, parking, CLP plan, and customer.
+                Choose a unit, review pricing and parking, then select a customer.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleGenerateQuotation} className="space-y-3">
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid gap-2.5 sm:grid-cols-2">
                   <div className="space-y-1">
                     <Label>Tower Filter</Label>
                     <Select value={towerFilter} onValueChange={setTowerFilter}>
@@ -493,16 +501,16 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                   </Select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid gap-2.5 sm:grid-cols-2">
                   <div className="space-y-1">
-                    <Label>Detailed charges — approved price book *</Label>
+                    <Label>Price Book *</Label>
                     {selectedUnit && <p className="text-xs text-muted-foreground">Base rate: {formatInr(selectedUnit.baseRatePerSqft)} / sq.ft., saved on this flat. The price book supplies additional charges and taxes.</p>}
                     <Select value={selectedPbId} onValueChange={setSelectedPbId}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {priceBooks.map((b) => (
                           <SelectItem key={b.id} value={b.id}>
-                            v{b.versionNumber} — {b.name}
+                            v{b.versionNumber} — {b.name} ({b.status.toLowerCase()})
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -511,7 +519,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                   <div className="space-y-1">
                     <Label>Payment Plan *</Label>
                     <Select value={selectedPlanId} onValueChange={setSelectedPlanId}>
-                      <SelectTrigger><SelectValue placeholder="Create plan ->" /></SelectTrigger>
+                      <SelectTrigger><SelectValue placeholder="Create a payment plan" /></SelectTrigger>
                       <SelectContent>
                         {paymentPlans.map((p) => (
                           <SelectItem key={p.id} value={p.id}>
@@ -523,32 +531,43 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <div className="grid gap-2.5 sm:grid-cols-2">
                   <div className="space-y-1">
                     <Label>Parking Spaces</Label>
                     <Input
                       type="number"
                       min={0}
-                      max={6}
-                      value={parkingCount}
+                      max={50}
+                      disabled={assignedPhysical.length > 0}
+                      value={assignedPhysical.length > 0 ? assignedPhysical.length : parkingCount}
                       onChange={(e) => setParkingCount(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
                     <Label>Parking Category</Label>
-                    <Select value={parkingType} onValueChange={(v: any) => setParkingType(v)}>
+                    {assignedPhysical.length > 0 ? (
+                      <Input disabled value={Array.from(new Set(assignedPhysical.map((slot) => slot.parkingType))).join(', ')} />
+                    ) : <Select value={parkingType} onValueChange={(v: any) => setParkingType(v)}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="STANDARD">Standard</SelectItem>
                         <SelectItem value="TANDEM">Tandem</SelectItem>
                         <SelectItem value="EV">EV Bay</SelectItem>
                         <SelectItem value="MECHANICAL">Mechanical</SelectItem>
+                        <SelectItem value="ACCESSIBLE">Accessible</SelectItem>
                       </SelectContent>
-                    </Select>
+                    </Select>}
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
+                <p className="text-xs text-muted-foreground">
+                  {assignedPhysical.length > 0
+                    ? `Using ${assignedPhysical.length} assigned parking slot(s) and their recorded prices. Category and price follow each physical slot.`
+                    : 'Parking is estimated from the selected count and price-book category. Assign physical slots in Parking.'}
+                </p>
+                {!selectedPlan && <p role="status" className="text-xs text-amber-700">Create a payment plan to enable PDF generation.</p>}
+
+                <div className="grid gap-2.5 sm:grid-cols-2">
                   <div className="space-y-1">
                     <Label>Permitted Discount</Label>
                     <Select value={discountType} onValueChange={(v: any) => setDiscountType(v)}>
@@ -585,10 +604,10 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                   <Select value={customerLeadId} onValueChange={(id) => {
                     setCustomerLeadId(id);
                     const lead = customerLeads.find((item) => item.id === id);
-                    setCustName(lead?.customerName ?? ''); setCustPhone(lead?.normalizedPhone ?? ''); setCustEmail(lead?.normalizedEmail ?? '');
+                    setCustName(lead?.customerName ?? ''); setCustPhone(lead?.phone ?? ''); setCustEmail(lead?.email ?? '');
                   }}>
                     <SelectTrigger><SelectValue placeholder="Select customer lead" /></SelectTrigger>
-                    <SelectContent><SelectItem value="NEW">Create new customer lead</SelectItem>{customerLeads.map((lead) => <SelectItem key={lead.id} value={lead.id}>{lead.customerName} — {lead.normalizedPhone}</SelectItem>)}</SelectContent>
+                    <SelectContent><SelectItem value="NEW">Create new customer lead</SelectItem>{customerLeads.map((lead) => <SelectItem key={lead.id} value={lead.id}>{lead.customerName} — {lead.phone}</SelectItem>)}</SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">A quotation creates a lead only. Hold or reserve the flat from inventory when the customer pays an advance.</p>
                   <Input
@@ -598,7 +617,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                     value={custName}
                     onChange={(e) => setCustName(e.target.value)}
                   />
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid gap-2 sm:grid-cols-2">
                     <Input
                       required
                       placeholder="Phone (+91...) *"
@@ -624,14 +643,14 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                 <Button
                   type="submit"
                   className="w-full"
-                  disabled={busy || !selectedUnit || !selectedPb || !selectedPlan}
+                  disabled={busy || !selectedUnit || !selectedPb || !selectedPlan || !liveBreakdown}
                 >
                   <Download className="h-4 w-4" />
                   {busy
-                    ? 'Generating Authoritative PDF...'
+                    ? 'Generating PDF…'
                     : liveBreakdown?.requiresDiscountApproval
-                      ? 'Submit Discount Approval & Generate Draft PDF'
-                      : 'Issue Versioned Quotation & Download PDF'}
+                      ? 'Request Approval & Download Draft'
+                      : 'Generate & Download PDF'}
                 </Button>
               </form>
             </CardContent>
@@ -640,14 +659,14 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
           {/* Right: Live Deterministic Cost Sheet & CLP Preview */}
           <Card className="lg:col-span-7">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-sm">
-                    Deterministic Cost Sheet Preview{' '}
+                    Cost Sheet Preview{' '}
                     {selectedUnit ? `— Unit ${selectedUnit.unitNumber}` : ''}
                   </CardTitle>
                   <CardDescription>
-                    Exact backend formula calculation. AI assists copy & explanations only.
+                    Review charges, taxes, and the payment schedule before generating your PDF.
                   </CardDescription>
                 </div>
                 <Button
@@ -673,8 +692,8 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                 <>
                   {/* Pricing Option & Per-SFT Breakup Card */}
                   <div className="rounded-lg border border-border bg-card p-3.5 space-y-2.5 shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-semibold uppercase tracking-wider text-primary">
                           Pricing Option & SFT Rate Breakup
                         </span>
@@ -725,7 +744,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                     </div>
                   </div>
 
-                  <div className="rounded-md border border-border overflow-hidden">
+                  <div className="rounded-md border border-border overflow-x-auto">
                     <table className="bm-table w-full text-xs">
                       <thead>
                         <tr>
@@ -792,7 +811,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
                     <div className="text-xs font-semibold">
                       Payment Schedule ({liveBreakdown.schedule.length} Milestones)
                     </div>
-                    <div className="rounded-md border border-border overflow-hidden max-h-56 overflow-y-auto">
+                    <div className="rounded-md border border-border overflow-x-auto max-h-56 overflow-y-auto">
                       <table className="bm-table w-full text-xs">
                         <thead>
                           <tr>
@@ -852,6 +871,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
               { accessorKey: 'unitNumber', header: 'Unit' },
               {
                 id: 'customer',
+                accessorFn: (quotation) => `${quotation.customer.name} ${quotation.customer.phone}`,
                 header: 'Customer',
                 cell: ({ row }) => (
                   <div>
@@ -990,7 +1010,7 @@ export function CostSheetGeneratorPanel({ projectId }: { projectId: string }) {
               ))}
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <Button
                 type="button"
                 variant="outline"

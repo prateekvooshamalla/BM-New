@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Firestore } from 'firebase-admin/firestore';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { z } from 'zod';
@@ -22,9 +23,11 @@ import {
   createTowerSchema,
   currencyCodeSchema,
   setProjectLifecycleStatusSchema,
+  updateProjectDetailsSchema,
 } from '@bharat-makaan/validation';
 import { adminDb } from '../shared/firebase-admin';
 import { requireOrgPermission, type AuthenticatedActor } from '../shared/auth-guard';
+import { parseCallableInput } from '../shared/validation';
 import { writeAuditEvent } from '../audit';
 import { ensureBaselinePriceBookForProject } from '../pricing';
 
@@ -55,9 +58,16 @@ export async function createProjectService(
   rawInput: unknown
 ): Promise<Project> {
   const input = createProjectSchema.parse(rawInput);
+  const projectRef = input.requestId
+    ? db.collection('projects').doc(createHash('sha256').update(`${input.orgId}:${actor.uid}:${input.requestId}`).digest('hex').slice(0, 32))
+    : db.collection('projects').doc();
   const nowIso = new Date().toISOString();
 
   return db.runTransaction(async (tx) => {
+    if (input.requestId) {
+      const existing = await tx.get(projectRef);
+      if (existing.exists) return existing.data() as Project;
+    }
     const orgRef = db.collection('organizations').doc(input.orgId);
     const subRef = db.collection('subscriptions').doc(input.orgId);
     const entRef = db.collection('entitlements').doc(input.orgId);
@@ -128,7 +138,6 @@ export async function createProjectService(
       input.structureTemplate ?? defaultTemplateForProjectType(input.projectType);
     const tplDef = PROJECT_STRUCTURE_TEMPLATES[structureTemplate];
 
-    const projectRef = db.collection('projects').doc();
     const projectSlug = `${input.name
       .trim()
       .toLowerCase()
@@ -149,6 +158,9 @@ export async function createProjectService(
       locality: input.locality.trim(),
       address: input.address.trim(),
       coordinates: input.coordinates,
+      postalCode: input.postalCode,
+      landmark: input.landmark,
+      description: input.description,
       currencyCode: input.currencyCode ?? org?.defaultCurrency ?? countryCfg.defaultCurrency,
       areaUnit: input.areaUnit ?? org?.defaultAreaUnit ?? countryCfg.defaultAreaUnit,
       timezone: input.timezone ?? org?.defaultTimezone ?? countryCfg.defaultTimezone,
@@ -309,9 +321,17 @@ export async function createTowerService(
   rawInput: unknown
 ): Promise<Tower> {
   const input = createTowerSchema.parse(rawInput);
+  const towerRef = input.requestId
+    ? db.collection('towers').doc(createHash('sha256').update(`${input.orgId}:${input.projectId}:${actor.uid}:${input.requestId}`).digest('hex').slice(0, 32))
+    : db.collection('towers').doc();
   const nowIso = new Date().toISOString();
 
   const createdTower = await db.runTransaction(async (tx) => {
+    if (input.requestId) {
+      const existing = await tx.get(towerRef);
+      if (existing.exists) return existing.data() as Tower;
+    }
+
     const projRef = db.collection('projects').doc(input.projectId);
     const projSnap = await tx.get(projRef);
     if (!projSnap.exists || projSnap.data()?.orgId !== input.orgId) {
@@ -345,7 +365,7 @@ export async function createTowerService(
       );
     }
 
-    const ref = db.collection('towers').doc();
+    const ref = towerRef;
     const tower: Tower = {
       id: ref.id,
       orgId: input.orgId,
@@ -591,6 +611,53 @@ export async function updateProjectConfigurationService(
   });
   return updated;
 }
+
+export async function updateProjectDetailsService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  actorRole: string,
+  rawInput: unknown
+): Promise<Project> {
+  const { orgId, projectId, coordinates, landAreaAcres, ...details } = parseCallableInput(updateProjectDetailsSchema, rawInput);
+  const projectRef = db.collection('projects').doc(projectId);
+  const now = new Date().toISOString();
+
+  return db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(projectRef);
+    const current = snapshot.data() as Project | undefined;
+    if (!current || current.orgId !== orgId) {
+      throw new HttpsError('not-found', 'Project not found in this organization.');
+    }
+    if (current.lifecycleStatus === 'ARCHIVED_READ_ONLY') {
+      throw new HttpsError('failed-precondition', 'Reactivate the project before editing its details.');
+    }
+
+    const updated: Project = { ...current, ...details, updatedAt: now };
+    if (coordinates === null) delete updated.coordinates;
+    else if (coordinates !== undefined) updated.coordinates = coordinates;
+    if (landAreaAcres === null) delete updated.landAreaAcres;
+    else if (landAreaAcres !== undefined) updated.landAreaAcres = landAreaAcres;
+    tx.set(projectRef, updated);
+    await writeAuditEvent(db, {
+      orgId,
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole,
+      action: 'PROJECT_DETAILS_UPDATED',
+      category: 'INVENTORY',
+      entityType: 'project',
+      entityId: projectId,
+      summary: 'Updated project details for ' + updated.name + '.',
+    }, tx);
+    return updated;
+  });
+}
+
+export const updateProjectDetails = onCall(async (request) => {
+  const input = parseCallableInput(updateProjectDetailsSchema, request.data);
+  const { actor, member } = await requireOrgPermission(request, input.orgId, 'projects:edit', input.projectId);
+  return updateProjectDetailsService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', input);
+});
 
 export const updateProjectConfiguration = onCall(async (request) => {
   const schema = z.object({

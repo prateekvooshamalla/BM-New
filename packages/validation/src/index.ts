@@ -171,6 +171,7 @@ export const transferLeadsSchema = z.object({
 
 // --- Projects, Phases, Towers, Floors & Units ---
 export const createProjectSchema = z.object({
+  requestId: z.string().uuid().optional(),
   orgId: z.string().min(1),
   builderName: z.string().min(2, 'Builder / Agency brand name is required').max(120),
   name: z.string().min(2, 'Project name is required').max(120),
@@ -181,6 +182,9 @@ export const createProjectSchema = z.object({
     .regex(/^[A-Z0-9_-]+$/i, 'Use alphanumeric characters, hyphens or underscores'),
   countryCode: z.string().min(2).max(3).default('IN'),
   stateOrRegion: z.string().max(80).optional(),
+  postalCode: z.string().trim().max(20).optional(),
+  landmark: z.string().trim().max(150).optional(),
+  description: z.string().trim().max(2000).optional(),
   city: z.string().min(2, 'City is required').max(80),
   locality: z.string().min(2, 'Locality / micro-market is required').max(120),
   address: z.string().min(5, 'Full project address is required').max(300),
@@ -224,6 +228,18 @@ export const createProjectSchema = z.object({
   isPublicPublished: z.boolean().default(false),
 });
 
+export const updateProjectDetailsSchema = createProjectSchema.pick({
+  builderName: true, name: true, countryCode: true, stateOrRegion: true, postalCode: true,
+  landmark: true, description: true, city: true, locality: true, address: true, coordinates: true,
+  reraNumber: true, landAreaAcres: true, configurations: true, amenities: true,
+  constructionStatus: true, possessionDate: true, isPublicPublished: true,
+}).partial().extend({
+  orgId: z.string().min(1),
+  projectId: z.string().min(1),
+  coordinates: createProjectSchema.shape.coordinates.nullable(),
+  landAreaAcres: createProjectSchema.shape.landAreaAcres.nullable(),
+});
+
 export const createPhaseSchema = z.object({
   orgId: z.string().min(1),
   projectId: z.string().min(1),
@@ -242,6 +258,7 @@ export const createPhaseSchema = z.object({
 });
 
 export const createTowerSchema = z.object({
+  requestId: z.string().uuid().optional(),
   orgId: z.string().min(1),
   projectId: z.string().min(1),
   phaseId: z.string().nullable().optional(),
@@ -272,8 +289,28 @@ export const createFloorSchema = z.object({
   ]),
 });
 
+export const roomDetailSchema = z.object({
+  name: z.string().trim().min(1, 'Room name is required').max(80),
+  type: z.enum(['BEDROOM', 'BATHROOM', 'LIVING', 'DINING', 'KITCHEN', 'BALCONY', 'STUDY', 'UTILITY', 'OTHER']),
+  lengthFt: z.coerce.number().positive().max(1000).optional(),
+  widthFt: z.coerce.number().positive().max(1000).optional(),
+}).refine((room) => (room.lengthFt === undefined) === (room.widthFt === undefined), {
+  message: 'Enter both room length and width, or leave both blank.',
+  path: ['widthFt'],
+});
+
+export const unitRoomFields = {
+  bedroomsCount: z.coerce.number().int().min(0).max(50).optional(),
+  bathroomsCount: z.coerce.number().int().min(0).max(50).optional(),
+  furnishing: z.enum(['UNFURNISHED', 'SEMI_FURNISHED', 'FULLY_FURNISHED']).optional(),
+  roomDetails: z.array(roomDetailSchema).max(100).optional(),
+  unitAmenities: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+};
+
 export const createUnitSchema = z
   .object({
+    ...unitRoomFields,
+    requestId: z.string().uuid().optional(),
     orgId: z.string().min(1),
     projectId: z.string().min(1),
     phaseId: z.string().nullable().optional(),
@@ -323,6 +360,8 @@ export const createUnitSchema = z
   });
 
 export const updateUnitSchema = z.object({
+  ...unitRoomFields,
+  balconiesCount: z.coerce.number().int().min(0).max(20).optional(),
   orgId: z.string().min(1),
   unitId: z.string().min(1),
   unitNumber: z.string().trim().min(1).max(40).optional(),
@@ -355,6 +394,7 @@ export const updateUnitSchema = z.object({
 });
 
 export const bulkGenerateUnitsSchema = z.object({
+  ...unitRoomFields,
   orgId: z.string().min(1),
   projectId: z.string().min(1),
   towerId: z.string().nullable().optional(),
@@ -744,6 +784,7 @@ export const createLeadSchema = z.object({
 export const convertLeadToCustomerSchema = z.object({
   orgId: z.string().min(1),
   leadId: z.string().min(1),
+  unitId: z.string().optional(),
   notes: z.string().max(1000).optional(),
 });
 
@@ -885,6 +926,7 @@ export const publicFormSubmissionSchema = z.object({
 
 // --- Documents & Floor Plans ---
 export const registerDocumentMetadataSchema = z.object({
+  requestId: z.string().uuid().optional(),
   orgId: z.string().min(1),
   projectId: z.string().nullable().optional(),
   towerId: z.string().nullable().optional(),

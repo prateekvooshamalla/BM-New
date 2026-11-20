@@ -31,6 +31,7 @@ import {
   type PriceRevision,
   type Unit,
 } from '@bharat-makaan/shared';
+import { useProjectPricingContext } from '@/features/pricing/hooks/useProjectPricingContext';
 import { callBackendFunction } from '@/lib/firebase';
 import { subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
@@ -130,6 +131,7 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [units, setUnits] = React.useState<Unit[]>([]);
 
+  const { parkingSlots, pricingOverrides } = useProjectPricingContext(projectId);
   const [selectedBookId, setSelectedBookId] = React.useState<string | null>(null);
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [previewUnitId, setPreviewUnitId] = React.useState<string>('');
@@ -226,9 +228,7 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
       sort: (a, b) => (b.versionNumber ?? 0) - (a.versionNumber ?? 0),
       onData: (list) => {
         setPriceBooks(list);
-        if (!selectedBookId && list[0]) {
-          setSelectedBookId(list[0].id);
-        }
+        setSelectedBookId((previous) => list.some((book) => book.id === previous) ? previous : (list[0]?.id ?? null));
       },
     });
 
@@ -246,7 +246,7 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
         where('entityType', '==', 'PRICE_BOOK'),
         where('status', '==', 'PENDING'),
       ],
-      filter: (a) => a.entityType === 'PRICE_BOOK' && a.status === 'PENDING',
+      filter: (a) => a.projectId === projectId && a.entityType === 'PRICE_BOOK' && a.status === 'PENDING',
       onData: setApprovals,
     });
 
@@ -256,9 +256,7 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
       projectId,
       onData: (list) => {
         setUnits(list);
-        if (!previewUnitId && list[0]) {
-          setPreviewUnitId(list[0].id);
-        }
+        setPreviewUnitId((previous) => list.some((unit) => unit.id === previous) ? previous : (list[0]?.id ?? ''));
       },
     });
 
@@ -269,19 +267,6 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
       unsubUnits();
     };
   }, [activeOrgId, projectId]);
-
-  React.useEffect(() => {
-    if (!activeOrgId || !projectId) return;
-    if (priceBooks.length === 0 && units.length > 0 && !busy) {
-      callBackendFunction('ensureBaselinePriceBook', {
-        orgId: activeOrgId,
-        projectId,
-        baseRatePerSqft: units[0].baseRatePerSqft || 8500,
-      }).catch(() => {
-        // Non-blocking sync
-      });
-    }
-  }, [activeOrgId, projectId, priceBooks.length, units.length, busy]);
 
   const selectedBook = priceBooks.find((b) => b.id === selectedBookId) ?? priceBooks[0] ?? null;
 
@@ -319,11 +304,12 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
 
   const addCustomChargeRow = () => {
     const idx = lineItems.length + 1;
+    const internalKey = `custom_charge_${crypto.randomUUID().replace(/-/g, '')}`;
     setLineItems([
       ...lineItems,
       {
         id: `custom-${Date.now()}`,
-        internalKey: `custom_charge_${idx}`,
+        internalKey,
         displayLabel: `Custom Charge ${idx}`,
         basis: 'FIXED_AMOUNT',
         amount: 100000,
@@ -351,7 +337,17 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
     setBusy(true);
     setBanner(null);
     try {
+      const editingBook = priceBooks.find((book) => book.id === editingId);
       const saved = await callBackendFunction<any, PriceBook>('savePriceBookDraft', {
+        currencyCode: editingBook?.currencyCode,
+        areaUnit: editingBook?.areaUnit,
+        pricingMode: editingBook?.pricingMode,
+        baseUnitPrice: editingBook?.baseUnitPrice,
+        baseConsiderationLabel: editingBook?.baseConsiderationLabel,
+        floorRiseLabel: editingBook?.floorRiseLabel,
+        parkingLabel: editingBook?.parkingLabel,
+        offers: editingBook?.offers,
+        defaultPaymentPlanId: editingBook?.defaultPaymentPlanId,
         orgId: activeOrgId,
         projectId,
         priceBookId: editingId,
@@ -366,29 +362,32 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
           ratePerFloorPerSqft: Number(floorRiseRate),
         },
         facingPremiumPerSqft: {
+          ...editingBook?.facingPremiumPerSqft,
           EAST: Number(eastPremium),
           NORTH: Number(northPremium),
-          NORTH_EAST: Number(eastPremium),
+          NORTH_EAST: editingBook?.facingPremiumPerSqft.NORTH_EAST ?? Number(eastPremium),
         },
         viewPremiumPerSqft: {
+          ...editingBook?.viewPremiumPerSqft,
           CENTRAL_PARK: Number(parkViewPremium),
         },
         cornerPremiumPerSqft: Number(cornerPremium),
         locationPremiumPerSqft: Number(locationPremium),
-        unitSpecificPremiumInr: {},
+        unitSpecificPremiumInr: editingBook?.unitSpecificPremiumInr ?? {},
         parkingPricesByType: {
           STANDARD: Number(stdParkingPrice),
           TANDEM: Number(tandemParkingPrice),
-          MECHANICAL: Number(stdParkingPrice),
+          MECHANICAL: editingBook?.parkingPricesByType.MECHANICAL ?? Number(stdParkingPrice),
           EV: Number(evParkingPrice),
-          ACCESSIBLE: Number(stdParkingPrice),
+          ACCESSIBLE: editingBook?.parkingPricesByType.ACCESSIBLE ?? Number(stdParkingPrice),
         },
         lineItems,
         taxConfig: {
+          ...editingBook?.taxConfig,
           agreementGstPct: Number(agreementGst),
           otherServiceGstPct: Number(serviceGst),
-          roundingMode: 'NEAREST_RUPEE',
-          registrationDisclaimer:
+          roundingMode: editingBook?.taxConfig.roundingMode ?? 'NEAREST_RUPEE',
+          registrationDisclaimer: editingBook?.taxConfig.registrationDisclaimer ??
             'Stamp duty & registration charges are payable at actuals as per prevailing Government norms.',
         },
         maxDiscountPctWithoutApproval: Number(maxAutoDiscount),
@@ -492,9 +491,14 @@ export function PriceBookManagerPanel({ projectId }: { projectId: string }) {
     if (!unit) return null;
     return {
       unit,
-      breakdown: calculateCostSheet({ unit, priceBook: selectedBook }),
+      breakdown: calculateCostSheet({
+        unit: { ...unit, baseRatePerSqft: undefined },
+        priceBook: selectedBook,
+        overrides: pricingOverrides,
+        allocatedParkingSlots: parkingSlots.filter((slot) => slot.status === 'ALLOCATED' && slot.allocatedUnitId === unit.id),
+      }),
     };
-  }, [selectedBook, units, previewUnitId]);
+  }, [selectedBook, units, previewUnitId, pricingOverrides, parkingSlots]);
 
   const versionChartData = React.useMemo(() => {
     return [...priceBooks]

@@ -17,7 +17,7 @@ import { CostSheetGeneratorPanel } from '@/features/quotations/components/CostSh
 
 export function PricingAndCostSheetsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = searchParams.get('tab') || 'price-books';
+  const tab = searchParams.get('tab') === 'quotations' ? 'quotations' : 'price-books';
   const { activeOrgId, projects, activeProjectId, selectProject } = useTenantStore();
   const currentProjectId = activeProjectId ?? projects[0]?.id ?? null;
 
@@ -25,7 +25,7 @@ export function PricingAndCostSheetsPage() {
     return (
       <EmptyState
         icon={Calculator}
-        title="No approved price book. Create your pricing rules."
+        title="Create a project to set up pricing"
         description="Create your first project under Projects & Inventory to configure dynamic price books, custom charges, and AI-assisted cost sheets."
       />
     );
@@ -35,11 +35,11 @@ export function PricingAndCostSheetsPage() {
     <div className="space-y-6">
       <PageHeader
         eyebrow="Dynamic Pricing & Quotations"
-        title="Pricing Engine & Cost Sheets"
-        description="Manage versioned price books, editable cost-sheet labels, construction-linked payment plans, and versioned PDF quotations."
+        title="Pricing & Cost Sheets"
+        description="Set project pricing, review charges, and generate customer cost sheets."
         actions={
           <Select value={currentProjectId} onValueChange={(v) => selectProject(v)}>
-            <SelectTrigger className="w-60">
+            <SelectTrigger className="w-full sm:w-60">
               <SelectValue placeholder="Select Project" />
             </SelectTrigger>
             <SelectContent>
@@ -53,18 +53,22 @@ export function PricingAndCostSheetsPage() {
         }
       />
 
-      <Tabs value={tab} onValueChange={(v) => setSearchParams({ tab: v })}>
-        <TabsList>
-          <TabsTrigger value="price-books">Dynamic Price Books & History</TabsTrigger>
-          <TabsTrigger value="quotations">Cost Sheet Generator & CLP Plans</TabsTrigger>
+      <Tabs value={tab} onValueChange={(v) => setSearchParams((previous) => {
+        const next = new URLSearchParams(previous);
+        next.set('tab', v);
+        return next;
+      })}>
+        <TabsList className="h-auto max-w-full flex-wrap">
+          <TabsTrigger value="price-books">Price Books</TabsTrigger>
+          <TabsTrigger value="quotations">Cost Sheets & Payment Plans</TabsTrigger>
         </TabsList>
 
         <TabsContent value="price-books">
-          <PriceBookManagerPanel projectId={currentProjectId} />
+          <PriceBookManagerPanel key={`${activeOrgId}:${currentProjectId}`} projectId={currentProjectId} />
         </TabsContent>
 
         <TabsContent value="quotations">
-          <CostSheetGeneratorPanel projectId={currentProjectId} />
+          <CostSheetGeneratorPanel key={`${activeOrgId}:${currentProjectId}`} projectId={currentProjectId} />
         </TabsContent>
       </Tabs>
     </div>

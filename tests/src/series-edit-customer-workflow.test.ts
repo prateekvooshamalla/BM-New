@@ -11,6 +11,7 @@ import { createProjectService, createTowerService } from '../../functions/src/pr
 import { ingestLeadService, convertLeadToCustomerService } from '../../functions/src/leads';
 import { savePriceBookDraftService, activatePriceBookService } from '../../functions/src/pricing';
 import { createQuotationService, createPaymentPlanService } from '../../functions/src/quotations';
+import { scheduleSiteVisitService } from '../../functions/src/notifications';
 import { createTransactionalTestFirestore } from './helpers/in-memory-firestore';
 import type { AuthenticatedActor } from '../../functions/src/shared/auth-guard';
 
@@ -580,5 +581,106 @@ describe('Flat Series Number, Edit Options & Customer Conversion Workflow', () =
     // Verify PDF is valid PDF Document
     const pdfDoc = await PDFDocument.load(quoteRes.pdfBytes);
     expect(pdfDoc.getPageCount()).toBeGreaterThanOrEqual(1);
+  });
+
+  it('differentiates leads vs customers, converts prospect to customer with flat purchase, and schedules site visits from existing contacts', async () => {
+    const { db, org, project, tower } = await setupProjectFixture();
+
+    // 1. Create a flat
+    const flat = await createUnitService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      towerId: tower.id,
+      towerName: tower.name,
+      floorNumber: 7,
+      series: '02',
+      unitNumber: 'TA-702',
+      unitType: 'APARTMENT',
+      bhk: '3 BHK',
+      saleableAreaSqft: 1850,
+      carpetAreaSqft: 1295,
+      facing: 'EAST',
+      baseRatePerSqft: 9200,
+      isCorner: true,
+      parkingEntitlementCount: 1,
+      listingMode: 'BUY',
+    });
+
+    // 2. Ingest an exploring prospect (not a customer yet)
+    const { lead: prospect } = await ingestLeadService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      customerName: 'Pooja Reddy',
+      phone: '+919876543299',
+      source: 'PUBLIC_PORTAL',
+      whatsappOptIn: true,
+    });
+
+    expect(prospect.isCustomer).toBeFalsy();
+    expect(prospect.customerConvertedAt).toBeFalsy();
+
+    // 3. Schedule a site visit for this existing prospect (linked via leadId)
+    const visit1 = await scheduleSiteVisitService(db, ADMIN, {
+      orgId: org.id,
+      projectId: project.id,
+      leadId: prospect.id,
+      customerName: prospect.customerName,
+      customerPhone: prospect.phone,
+      scheduledStartAt: '2026-11-25T10:00:00.000Z',
+      scheduledEndAt: '2026-11-25T11:00:00.000Z',
+      timezone: 'Asia/Kolkata',
+      notes: 'Interested in 3 BHK corner units above 5th floor',
+    });
+
+    expect(visit1.leadId).toBe(prospect.id);
+    expect(visit1.customerName).toBe('Pooja Reddy');
+
+    // 4. Convert prospect to customer with purchased flat
+    const converted = await convertLeadToCustomerService(db, ADMIN, {
+      orgId: org.id,
+      leadId: prospect.id,
+      unitId: flat.id,
+      notes: 'Customer finalized Tower Alpha flat 702 and paid token',
+    });
+
+    expect(converted.isCustomer).toBe(true);
+    expect(converted.customerConvertedAt).toBeDefined();
+    expect(converted.convertedByUid).toBe(ADMIN.uid);
+
+    // Verify activity includes flat purchase details
+    const activitiesSnap = await db
+      .collection('lead_activities')
+      .where('leadId', '==', prospect.id)
+      .get();
+    const activities = activitiesSnap.docs.map((d) => d.data());
+    const conversionAct = activities.find((a) => a.title.includes('Converted from Prospect to Customer'));
+    expect(conversionAct).toBeDefined();
+    expect(conversionAct?.title).toContain('TA-702');
+
+    // 5. Schedule a follow-up site visit for the now-verified customer
+    const visit2 = await scheduleSiteVisitService(db, ADMIN, {
+      orgId: org.id,
+      projectId: project.id,
+      leadId: converted.id,
+      customerName: converted.customerName,
+      customerPhone: converted.phone,
+      scheduledStartAt: '2026-11-28T14:00:00.000Z',
+      scheduledEndAt: '2026-11-28T15:00:00.000Z',
+      timezone: 'Asia/Kolkata',
+      notes: 'Interior measurements and walkthrough with family',
+    });
+
+    expect(visit2.leadId).toBe(converted.id);
+    expect(visit2.customerName).toBe('Pooja Reddy');
+
+    // 6. Verify database records
+    const leadDoc = await db.collection('leads').doc(prospect.id).get();
+    expect(leadDoc.data()?.isCustomer).toBe(true);
+
+    const visitsSnap = await db
+      .collection('site_visits')
+      .where('leadId', '==', prospect.id)
+      .get();
+    expect(visitsSnap.size).toBe(2);
   });
 });

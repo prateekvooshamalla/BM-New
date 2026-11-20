@@ -194,6 +194,9 @@ export async function createBookingService(
   if (leadSnap.exists) {
     await leadSnap.ref.update({
       stage: 'BOOKED',
+      isCustomer: true,
+      customerConvertedAt: leadSnap.data()?.customerConvertedAt || nowIso,
+      convertedByUid: actor.uid,
       linkedBookingIds: [...(leadSnap.data()?.linkedBookingIds ?? []), booking.id],
       updatedAt: nowIso,
     });

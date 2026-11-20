@@ -29,6 +29,15 @@ import type {
 } from './entities';
 import { getCurrencyConfig, toMinorUnits } from './formatters';
 
+export function getQuotationPriceBooks(books: PriceBook[]): PriceBook[] {
+  const priority: Partial<Record<PriceBook['status'], number>> = {
+    ACTIVE: 0, APPROVED: 1, DRAFT: 2,
+  };
+  return books
+    .filter((book) => priority[book.status] !== undefined)
+    .sort((a, b) => priority[a.status]! - priority[b.status]! || b.versionNumber - a.versionNumber || a.id.localeCompare(b.id));
+}
+
 export const PRICING_SCOPE_PRECEDENCE: readonly PricingScopeLevel[] = [
   'ORGANIZATION',
   'PROJECT',

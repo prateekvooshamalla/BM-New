@@ -14,6 +14,7 @@ export const WORKSPACE_COLLECTION_ACCESS = {
   parking_slots: { permissions: ['parking:view'], projectScoped: true },
   parking_allocations: { permissions: ['parking:view'], projectScoped: true },
   price_books: { permissions: ['pricing:view'], projectScoped: true },
+  pricing_overrides: { permissions: ['pricing:view'], projectScoped: true },
   price_revisions: { permissions: ['pricing:view'], projectScoped: true },
   payment_plans: {
     permissions: ['pricing:view', 'quotations:view'],
@@ -85,6 +86,7 @@ export function filterWorkspaceSnapshotRecords(
     if (collectionName === 'projects') return allowedProjects.has(id);
 
     const projectId = data.projectId;
+    if (collectionName === 'pricing_overrides' && !projectId && data.scopeLevel === 'ORGANIZATION') return true;
     if (
       collectionName === 'ai_inventory_drafts' &&
       (projectId === null || projectId === undefined)

@@ -25,6 +25,7 @@ interface DataTableProps<TData> {
   columns: ColumnDef<TData, any>[];
   data: TData[];
   searchPlaceholder?: string;
+  showSearch?: boolean;
   emptyMessage?: string;
   pageSize?: number;
   toolbarRight?: React.ReactNode;
@@ -35,6 +36,7 @@ export function DataTable<TData>({
   columns,
   data,
   searchPlaceholder = 'Search records...',
+  showSearch = true,
   emptyMessage = 'No records found.',
   pageSize = 12,
   toolbarRight,
@@ -63,8 +65,8 @@ export function DataTable<TData>({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-xs">
+      {(showSearch || toolbarRight) && <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+        {showSearch && <div className="relative w-full sm:max-w-xs">
           <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             value={globalFilter ?? ''}
@@ -72,9 +74,9 @@ export function DataTable<TData>({
             placeholder={searchPlaceholder}
             className="pl-8"
           />
-        </div>
+        </div>}
         {toolbarRight && <div className="flex flex-wrap items-center gap-2">{toolbarRight}</div>}
-      </div>
+      </div>}
 
       <Table>
         <TableHeader>

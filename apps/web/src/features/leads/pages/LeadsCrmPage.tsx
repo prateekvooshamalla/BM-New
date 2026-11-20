@@ -2,25 +2,31 @@ import * as React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { where } from 'firebase/firestore';
 import {
+  CalendarClock,
+  CheckCircle2,
   Download,
   FileSpreadsheet,
   Kanban,
   List,
   MessageSquare,
   Plus,
+  Search,
   Sparkles,
+  Star,
   Upload,
   UserCheck,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import {
   formatInrCompact,
-  LEAD_PIPELINE_ORDER,
+  hasPermission,
   type Lead,
   type LeadActivity,
   type LeadSource,
   type LeadStage,
   type OrganizationMember,
+  type SiteVisit,
 } from '@bharat-makaan/shared';
 import { callBackendFunction } from '@/lib/firebase';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
@@ -34,7 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent } from '@/components/ui/card';
+import { isCustomer, LEAD_STAGES, LeadsKanban, stageLabel } from '../components/LeadsKanban';
 import {
   Select,
   SelectContent,
@@ -65,13 +71,25 @@ const SOURCES: LeadSource[] = [
 ];
 
 export function LeadsCrmPage() {
+  const orgId = useTenantStore((state) => state.activeOrgId);
+  return <LeadWorkspace key={orgId} />;
+}
+
+function LeadWorkspace() {
   const navigate = useNavigate();
-  const { activeOrgId, projects } = useTenantStore();
+  const { activeOrgId, projects, activeMember, isSuperAdmin } = useTenantStore();
 
   const [leads, setLeads] = React.useState<Lead[]>([]);
   const [members, setMembers] = React.useState<OrganizationMember[]>([]);
   const [viewMode, setViewMode] = React.useState<'kanban' | 'table'>('kanban');
-  const [customerFilter, setCustomerFilter] = React.useState<'PROSPECTS' | 'CUSTOMERS' | 'ALL'>('PROSPECTS');
+  const [customerFilter, setCustomerFilter] = React.useState<'PROSPECTS' | 'CUSTOMERS' | 'ALL'>('ALL');
+  const [stageFilter, setStageFilter] = React.useState<LeadStage | 'ALL'>('ALL');
+  const [query, setQuery] = React.useState('');
+  const [stageError, setStageError] = React.useState<string | null>(null);
+  const [pendingStageId, setPendingStageId] = React.useState<string | null>(null);
+  const pendingMove = React.useRef(false);
+  const [reasonMove, setReasonMove] = React.useState<{ lead: Lead; stage: LeadStage } | null>(null);
+  const canMove = () => isSuperAdmin || hasPermission(activeMember, 'leads:edit');
   const [sourceFilter, setSourceFilter] = React.useState<string>('ALL');
   const [qualFilter, setQualFilter] = React.useState<string>('ALL');
 
@@ -79,9 +97,16 @@ export function LeadsCrmPage() {
   const [createOpen, setCreateOpen] = React.useState(false);
   const [selectedLead, setSelectedLead] = React.useState<Lead | null>(null);
   const [leadActivities, setLeadActivities] = React.useState<LeadActivity[]>([]);
+  const [leadVisits, setLeadVisits] = React.useState<SiteVisit[]>([]);
   const [bulkAgentUid, setBulkAgentUid] = React.useState('');
   const [banner, setBanner] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+
+  // Convert to Customer Modal
+  const [convertModalOpen, setConvertModalOpen] = React.useState(false);
+  const [convertTargetLead, setConvertTargetLead] = React.useState<Lead | null>(null);
+  const [convertNotes, setConvertNotes] = React.useState('');
+  const [convertFlat, setConvertFlat] = React.useState('');
 
   // Create Lead Form
   const [custName, setCustName] = React.useState('');
@@ -89,10 +114,10 @@ export function LeadsCrmPage() {
   const [custEmail, setCustEmail] = React.useState('');
   const [leadSource, setLeadSource] = React.useState<LeadSource>('MANUAL');
   const [campaign, setCampaign] = React.useState('');
-  const [budgetMax, setBudgetMax] = React.useState('25000000');
+  const [budgetMax, setBudgetMax] = React.useState('');
   const [prefProjectId, setPrefProjectId] = React.useState('');
-  const [bhkPref, setBhkPref] = React.useState('3 BHK');
-  const [timeline, setTimeline] = React.useState<'IMMEDIATE' | '1_TO_3_MONTHS' | '3_TO_6_MONTHS' | '6_PLUS_MONTHS'>('1_TO_3_MONTHS');
+  const [bhkPref, setBhkPref] = React.useState('');
+  const [timeline, setTimeline] = React.useState<'IMMEDIATE' | '1_TO_3_MONTHS' | '3_TO_6_MONTHS' | '6_PLUS_MONTHS' | ''>('');
   const [notes, setNotes] = React.useState('');
 
   // Activity Form inside Lead 360 Drawer
@@ -124,51 +149,105 @@ export function LeadsCrmPage() {
     };
   }, [activeOrgId]);
 
+  const selectedLeadId = selectedLead?.id;
   React.useEffect(() => {
-    if (!activeOrgId || !selectedLead) {
+    setSelectedLead((current) => current ? leads.find((lead) => lead.id === current.id) ?? current : null);
+  }, [leads]);
+  React.useEffect(() => {
+    setLeadActivities([]);
+    if (!activeOrgId || !selectedLeadId) {
       setLeadActivities([]);
       return;
     }
     return subscribeTenantCollection<LeadActivity>({
       orgId: activeOrgId,
       collectionName: 'lead_activities',
-      extraConstraints: [where('leadId', '==', selectedLead.id)],
-      filter: (a) => a.leadId === selectedLead.id,
+      extraConstraints: [where('leadId', '==', selectedLeadId)],
+      filter: (a) => a.leadId === selectedLeadId,
       sort: sortDescByIso<LeadActivity>('createdAt'),
       onData: setLeadActivities,
     });
-  }, [activeOrgId, selectedLead]);
+  }, [activeOrgId, selectedLeadId]);
 
-  const filteredLeads = React.useMemo(() => {
-    return leads.filter((l) => {
-      const isCust = Boolean(l.isCustomer || l.stage === 'BOOKED' || l.stage === 'CLOSED');
-      if (customerFilter === 'PROSPECTS' && isCust) return false;
-      if (customerFilter === 'CUSTOMERS' && !isCust) return false;
-      if (sourceFilter !== 'ALL' && l.source !== sourceFilter) return false;
-      if (qualFilter !== 'ALL' && l.qualificationStatus !== qualFilter) return false;
-      return true;
+  // Subscribe to site visits for the selected lead
+  React.useEffect(() => {
+    setLeadVisits([]);
+    if (!activeOrgId || !selectedLeadId) return;
+    return subscribeTenantCollection<SiteVisit>({
+      orgId: activeOrgId,
+      collectionName: 'site_visits',
+      extraConstraints: [where('leadId', '==', selectedLeadId)],
+      filter: (v) => v.leadId === selectedLeadId,
+      sort: sortDescByIso<SiteVisit>('scheduledStartAt'),
+      onData: setLeadVisits,
     });
-  }, [leads, customerFilter, sourceFilter, qualFilter]);
+  }, [activeOrgId, selectedLeadId]);
 
-  const handleConvertToCustomer = async (lead: Lead) => {
-    if (!activeOrgId) return;
+  const prospectsCount = React.useMemo(() => leads.filter((l) => !isCustomer(l)).length, [leads]);
+  const customersCount = React.useMemo(() => leads.filter((l) => isCustomer(l)).length, [leads]);
+  const conversionRate = leads.length > 0 ? Math.round((customersCount / leads.length) * 100) : 0;
+
+  const matchingLeads = React.useMemo(() => {
+    const search = query.trim().toLowerCase();
+    return leads.filter((lead) => {
+      if (customerFilter === 'PROSPECTS' && isCustomer(lead)) return false;
+      if (customerFilter === 'CUSTOMERS' && !isCustomer(lead)) return false;
+      if (sourceFilter !== 'ALL' && lead.source !== sourceFilter) return false;
+      if (qualFilter !== 'ALL' && lead.qualificationStatus !== qualFilter) return false;
+      return !search || [lead.customerName, lead.phone, lead.normalizedPhone, lead.email, stageLabel(lead.source)]
+        .some((value) => value?.toLowerCase().includes(search));
+    });
+  }, [leads, query, customerFilter, sourceFilter, qualFilter]);
+  const stageCounts = new Map<LeadStage, number>();
+  for (const lead of matchingLeads) stageCounts.set(lead.stage, (stageCounts.get(lead.stage) ?? 0) + 1);
+  const filteredLeads = stageFilter === 'ALL' ? matchingLeads : matchingLeads.filter((lead) => lead.stage === stageFilter);
+  const sources = [...new Set(leads.map((lead) => lead.source))].sort();
+  const qualificationOptions = [...new Set(leads.map((lead) => lead.qualificationStatus).filter(Boolean))].sort();
+  const hasFilters = Boolean(query || customerFilter !== 'ALL' || stageFilter !== 'ALL' || sourceFilter !== 'ALL' || qualFilter !== 'ALL');
+  const clearFilters = () => {
+    setQuery(''); setCustomerFilter('ALL'); setStageFilter('ALL'); setSourceFilter('ALL'); setQualFilter('ALL');
+  };
+
+  const handleOpenConvertModal = (lead: Lead) => {
+    setConvertTargetLead(lead);
+    setConvertNotes('Purchased flat and converted to verified buyer customer.');
+    setConvertFlat('');
+    setConvertModalOpen(true);
+  };
+
+  const handleConfirmConvert = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrgId || !convertTargetLead) return;
     setBusy(true);
     try {
+      const noteText = convertFlat.trim()
+        ? `${convertNotes.trim()} (Purchased Flat: ${convertFlat.trim()})`
+        : convertNotes.trim();
+
       const updated = await callBackendFunction<any, Lead>('convertLeadToCustomer', {
         orgId: activeOrgId,
-        leadId: lead.id,
-        notes: `Converted to verified Customer from CRM.`,
+        leadId: convertTargetLead.id,
+        notes: noteText || 'Converted from Prospect to verified Customer.',
       });
+
       setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
       if (selectedLead?.id === updated.id) {
         setSelectedLead(updated);
       }
-      setBanner(`Successfully converted "${lead.customerName}" from Prospect to Customer!`);
+      setConvertModalOpen(false);
+      setConvertTargetLead(null);
+      setConvertNotes('');
+      setConvertFlat('');
+      setBanner(`Successfully converted "${convertTargetLead.customerName}" from Prospect to verified Customer!`);
     } catch (err) {
       setBanner(err instanceof Error ? err.message : 'Failed to convert to customer.');
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleConvertToCustomer = async (lead: Lead) => {
+    handleOpenConvertModal(lead);
   };
 
   const handleCreateLead = async (e: React.FormEvent) => {
@@ -187,15 +266,18 @@ export function LeadsCrmPage() {
           campaign: campaign || undefined,
           budgetMaxInr: Number(budgetMax) || undefined,
           preferredProjectIds: prefProjectId ? [prefProjectId] : [],
-          bhkPreference: bhkPref,
-          buyingTimeline: timeline,
+          bhkPreference: bhkPref.trim() || undefined,
+          buyingTimeline: timeline || undefined,
           notes,
         }
       );
+      setLeads((current) => [res.lead, ...current.filter((lead) => lead.id !== res.lead.id)]);
       setCreateOpen(false);
       setCustName('');
       setCustPhone('');
       setCustEmail('');
+      setLeadSource('MANUAL'); setCampaign(''); setBudgetMax(''); setPrefProjectId('');
+      setBhkPref(''); setTimeline(''); setNotes('');
       setBanner(
         res.deduplicated
           ? `Existing lead matched (${res.lead.normalizedPhone}); merged enquiry without duplicating ownership.`
@@ -208,23 +290,40 @@ export function LeadsCrmPage() {
     }
   };
 
-  const handleStageChange = async (lead: Lead, stage: LeadStage) => {
-    if (!activeOrgId) return;
-    setBusy(true);
+  const saveStage = async (lead: Lead, stage: LeadStage, reason?: string) => {
+    if (!activeOrgId || !canMove() || pendingMove.current || lead.stage === stage) return;
+    pendingMove.current = true;
+    setPendingStageId(lead.id);
+    setStageError(null);
+    setBanner(null);
     try {
-      const updated = await callBackendFunction<any, Lead>('updateLeadStage', {
-        orgId: activeOrgId,
-        leadId: lead.id,
-        stage,
-        lostReason: lostReason || undefined,
+      const updated = await callBackendFunction<unknown, Lead>('updateLeadStage', {
+        orgId: activeOrgId, leadId: lead.id, stage, expectedStage: lead.stage, lostReason: reason,
       });
-      setSelectedLead(updated);
-      setBanner(`Moved ${lead.customerName} to ${stage}.`);
+      setLeads((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setSelectedLead((current) => current?.id === updated.id ? updated : current);
+      setReasonMove(null);
+      setLostReason('');
+      setBanner(`Moved ${lead.customerName} to ${stageLabel(stage)}.`);
     } catch (err) {
-      setBanner(err instanceof Error ? err.message : 'Stage update failed.');
+      const message = err instanceof Error ? err.message : 'Could not move the lead.';
+      setStageError(message);
+      setBanner(message);
     } finally {
-      setBusy(false);
+      pendingMove.current = false;
+      setPendingStageId(null);
     }
+  };
+  const requestStageMove = (lead: Lead, stage: LeadStage) => {
+    if (!canMove() || pendingMove.current || lead.stage === stage) return;
+    if (stage === 'LOST' || stage === 'UNQUALIFIED') {
+      setBanner(null);
+      setLostReason('');
+      setStageError(null);
+      setReasonMove({ lead, stage });
+      return;
+    }
+    void saveStage(lead, stage);
   };
 
   const handleAddActivity = async (e: React.FormEvent) => {
@@ -335,21 +434,17 @@ export function LeadsCrmPage() {
     );
   }
 
-  const bookedCount = leads.filter((l) => l.stage === 'BOOKED' || l.stage === 'CLOSED').length;
-  const conversionPct = leads.length > 0 ? ((bookedCount / leads.length) * 100).toFixed(1) : '0.0';
-
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-5">
       <PageHeader
-        eyebrow="Omnichannel Sales Pipeline"
         title="Leads & CRM"
-        description="Capture, deduplicate, qualify, score, and convert property buyers across Kanban and enterprise table views."
+        description="Track enquiries, follow up with buyers, and move leads through your pipeline."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" asChild>
               <Link to="/app/forms">
                 <FileSpreadsheet className="h-3.5 w-3.5" />
-                Lead Form Builder
+                Lead Forms
               </Link>
             </Button>
             <PermissionGate permission="leads:import_export">
@@ -374,211 +469,156 @@ export function LeadsCrmPage() {
       />
 
       {banner && (
-        <div className="rounded-lg border border-border bg-secondary px-4 py-2.5 text-xs">
+        <div role="status" className="rounded-lg border border-border bg-secondary px-4 py-2.5 text-sm">
           {banner}
         </div>
       )}
 
-      {/* Conversion & Pipeline Filter Bar */}
-      <Card>
-        <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            <span>
-              Total Leads: <strong>{leads.length}</strong>
-            </span>
-            <span>•</span>
-            <span>
-              Conversion Rate: <strong className="text-emerald-700">{conversionPct}%</strong>
-            </span>
+      {/* KPI Overview: Differentiating Prospects vs Verified Flat Buyers (Customers) */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-border bg-card p-3">
+          <span className="text-[11px] text-muted-foreground block flex items-center gap-1">
+            <Users className="h-3 w-3 text-primary" />
+            Total Pipeline Contacts
+          </span>
+          <span className="text-xl font-bold text-foreground">{leads.length}</span>
+        </div>
+        <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
+          <span className="text-[11px] text-sky-700 dark:text-sky-400 block flex items-center gap-1 font-medium">
+            <UserPlus className="h-3 w-3 text-sky-500" />
+            Prospect Leads (Exploring)
+          </span>
+          <span className="text-xl font-bold text-sky-700 dark:text-sky-300">
+            {prospectsCount}
+          </span>
+        </div>
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <span className="text-[11px] text-emerald-700 dark:text-emerald-400 block flex items-center gap-1 font-medium">
+            <Star className="h-3 w-3 fill-emerald-500 text-emerald-500" />
+            Verified Customers (Flat Buyers)
+          </span>
+          <span className="text-xl font-bold text-emerald-700 dark:text-emerald-300">
+            {customersCount}
+          </span>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-3">
+          <span className="text-[11px] text-muted-foreground block flex items-center gap-1">
+            <CheckCircle2 className="h-3 w-3 text-primary" />
+            Customer Conversion Rate
+          </span>
+          <span className="text-xl font-bold text-foreground">{conversionRate}%</span>
+        </div>
+      </div>
 
-            {/* Prospects vs Customers Segment Toggle */}
-            <div className="flex items-center gap-1 rounded-md border border-border p-0.5 bg-secondary/60">
-              <Button
-                type="button"
-                variant={customerFilter === 'PROSPECTS' ? 'default' : 'ghost'}
-                size="sm"
-                className="h-7 text-xs px-2.5 font-medium"
-                onClick={() => setCustomerFilter('PROSPECTS')}
-              >
-                Prospects ({leads.filter((l) => !l.isCustomer && l.stage !== 'BOOKED' && l.stage !== 'CLOSED').length})
-              </Button>
-              <Button
-                type="button"
-                variant={customerFilter === 'CUSTOMERS' ? 'default' : 'ghost'}
-                size="sm"
-                className="h-7 text-xs px-2.5 font-medium"
-                onClick={() => setCustomerFilter('CUSTOMERS')}
-              >
-                Customers ({leads.filter((l) => l.isCustomer || l.stage === 'BOOKED' || l.stage === 'CLOSED').length})
-              </Button>
-              <Button
-                type="button"
-                variant={customerFilter === 'ALL' ? 'default' : 'ghost'}
-                size="sm"
-                className="h-7 text-xs px-2.5 font-medium"
-                onClick={() => setCustomerFilter('ALL')}
-              >
-                All ({leads.length})
-              </Button>
-            </div>
-
-            <Select value={sourceFilter} onValueChange={setSourceFilter}>
-              <SelectTrigger className="h-8 w-40 text-xs">
-                <SelectValue placeholder="Source" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All Sources</SelectItem>
-                {SOURCES.map((s) => (
-                  <SelectItem key={s} value={s}>{s.replace(/_/g, ' ')}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select value={qualFilter} onValueChange={setQualFilter}>
-              <SelectTrigger className="h-8 w-36 text-xs">
-                <SelectValue placeholder="Qualification" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ALL">All Qualifications</SelectItem>
-                <SelectItem value="HOT">HOT</SelectItem>
-                <SelectItem value="WARM">WARM</SelectItem>
-                <SelectItem value="COLD">COLD</SelectItem>
-                <SelectItem value="UNREVIEWED">UNREVIEWED</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <PermissionGate permission="leads:assign">
-              {members.length > 0 && (
-                <div className="flex items-center gap-1.5">
-                  <Select value={bulkAgentUid} onValueChange={setBulkAgentUid}>
-                    <SelectTrigger className="h-8 w-40 text-xs">
-                      <SelectValue placeholder="Bulk assign to..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {members.map((m) => (
-                        <SelectItem key={m.uid} value={m.uid}>{m.displayName}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button variant="outline" size="sm" disabled={!bulkAgentUid || busy} onClick={handleBulkAssign}>
-                    Assign
-                  </Button>
-                </div>
-              )}
-            </PermissionGate>
-
+      <div className="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+        {/* Contact Type Primary Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
-              variant={viewMode === 'kanban' ? 'default' : 'outline'}
+              type="button"
+              variant={customerFilter === 'ALL' ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setViewMode('kanban')}
+              className="h-8 text-xs gap-1.5"
+              onClick={() => setCustomerFilter('ALL')}
             >
-              <Kanban className="h-3.5 w-3.5" />
-              Kanban
+              <Users className="h-3.5 w-3.5" />
+              All Contacts ({leads.length})
             </Button>
             <Button
-              variant={viewMode === 'table' ? 'default' : 'outline'}
+              type="button"
+              variant={customerFilter === 'PROSPECTS' ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setViewMode('table')}
+              className="h-8 text-xs gap-1.5 text-sky-800 dark:text-sky-300"
+              onClick={() => setCustomerFilter('PROSPECTS')}
             >
-              <List className="h-3.5 w-3.5" />
-              Table
+              <UserPlus className="h-3.5 w-3.5 text-sky-600" />
+              Prospect Leads ({prospectsCount})
+            </Button>
+            <Button
+              type="button"
+              variant={customerFilter === 'CUSTOMERS' ? 'default' : 'outline'}
+              size="sm"
+              className="h-8 text-xs gap-1.5 text-emerald-800 dark:text-emerald-300"
+              onClick={() => setCustomerFilter('CUSTOMERS')}
+            >
+              <Star className="h-3.5 w-3.5 fill-emerald-600 text-emerald-600" />
+              Verified Customers ({customersCount})
             </Button>
           </div>
-        </CardContent>
-      </Card>
+
+          <div className="flex items-center gap-1 rounded-lg border border-border bg-secondary/40 p-1" aria-label="Lead view">
+            <Button variant={viewMode === 'kanban' ? 'default' : 'ghost'} aria-pressed={viewMode === 'kanban'} size="sm" onClick={() => setViewMode('kanban')}><Kanban className="size-4" />Board</Button>
+            <Button variant={viewMode === 'table' ? 'default' : 'ghost'} aria-pressed={viewMode === 'table'} size="sm" onClick={() => setViewMode('table')}><List className="size-4" />List</Button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="relative min-w-0 flex-1 sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+            <Input aria-label="Search leads" placeholder="Search by name, phone, or email" value={query}
+              onChange={(event) => setQuery(event.target.value)} className="pl-9" />
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={stageFilter} onValueChange={(value) => setStageFilter(value as LeadStage | 'ALL')}>
+            <SelectTrigger aria-label="Filter by stage" className="h-8 w-auto min-w-36 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All stages ({matchingLeads.length})</SelectItem>
+              {LEAD_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{stageLabel(stage)} ({stageCounts.get(stage) ?? 0})</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger aria-label="Filter by source" className="h-8 w-auto min-w-28 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="ALL">All sources</SelectItem>
+              {[...new Set([...sources, ...(sourceFilter === 'ALL' ? [] : [sourceFilter])])].map((source) => <SelectItem key={source} value={source}>{stageLabel(source)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={qualFilter} onValueChange={setQualFilter}>
+            <SelectTrigger aria-label="Filter by qualification" className="h-8 w-auto min-w-36 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="ALL">All qualifications</SelectItem>
+              {[...new Set([...qualificationOptions, ...(qualFilter === 'ALL' ? [] : [qualFilter])])].map((status) => <SelectItem key={status} value={status}>{stageLabel(status)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          {hasFilters && <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>Clear filters</Button>}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+          <p role="status" className="text-xs text-muted-foreground">Showing {filteredLeads.length} of {leads.length} contacts</p>
+          <PermissionGate permission="leads:assign">
+            {members.some((member) => member.status === 'ACTIVE') && <div className="flex flex-wrap items-center gap-2">
+              <Select value={bulkAgentUid} onValueChange={setBulkAgentUid}>
+                <SelectTrigger aria-label="Choose assignee" className="h-8 w-36 text-xs"><SelectValue placeholder="Choose assignee" /></SelectTrigger>
+                <SelectContent>{members.filter((member) => member.status === 'ACTIVE').map((member) => <SelectItem key={member.uid} value={member.uid}>{member.displayName}</SelectItem>)}</SelectContent>
+              </Select>
+              <Button variant="outline" size="sm" disabled={!bulkAgentUid || busy || !filteredLeads.length} onClick={handleBulkAssign}>Assign shown ({Math.min(50, filteredLeads.length)})</Button>
+            </div>}
+          </PermissionGate>
+        </div>
+      </div>
 
       {leads.length === 0 ? (
-        <EmptyState
-          icon={Users}
-          title="No leads received yet. Connect a lead source or create a form."
-          description="Capture leads from Meta Lead Ads, Google Ads, Website Forms, Channel Partners, WhatsApp, or manual walk-ins."
-          actionLabel="Register First Lead"
-          onAction={() => setCreateOpen(true)}
-          secondaryAction={
-            <Button variant="outline" size="sm" onClick={() => navigate('/app/forms')}>
-              Design Lead Form
-            </Button>
-          }
-        />
+        <EmptyState icon={Users} title="No leads yet" description="Add an enquiry or share a lead form to start building your pipeline."
+          secondaryAction={<PermissionGate permission="leads:create"><Button onClick={() => setCreateOpen(true)}>Add Lead</Button></PermissionGate>} />
       ) : viewMode === 'kanban' ? (
-        <div className="flex gap-3 overflow-x-auto pb-4">
-          {LEAD_PIPELINE_ORDER.map((stage) => {
-            const stageLeads = filteredLeads.filter((l) => l.stage === stage);
-            return (
-              <div
-                key={stage}
-                className="w-72 shrink-0 rounded-xl border border-border bg-secondary/40 p-3 space-y-2.5"
-              >
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-xs font-semibold uppercase tracking-wider">
-                    {stage.replace(/_/g, ' ')}
-                  </span>
-                  <span className="rounded-full bg-card px-2 py-0.5 text-[11px] font-bold border border-border">
-                    {stageLeads.length}
-                  </span>
-                </div>
-
-                <div className="space-y-2 max-h-[560px] overflow-y-auto">
-                  {stageLeads.map((lead) => (
-                    <div
-                      key={lead.id}
-                      onClick={() => setSelectedLead(lead)}
-                      className="rounded-lg border border-border bg-card p-3 shadow-2xs hover:border-primary/50 cursor-pointer transition-colors"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-sm font-semibold truncate">{lead.customerName}</span>
-                          {lead.isCustomer || lead.stage === 'BOOKED' || lead.stage === 'CLOSED' ? (
-                            <span className="shrink-0 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 px-1.5 py-0.2 text-[9px] font-bold">
-                              Customer
-                            </span>
-                          ) : (
-                            <span className="shrink-0 rounded bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 px-1.5 py-0.2 text-[9px] font-bold">
-                              Prospect
-                            </span>
-                          )}
-                        </div>
-                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">
-                          {lead.leadScore}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {lead.normalizedPhone} • {lead.bhkPreference || 'Any BHK'}
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-[11px]">
-                        <span className="text-muted-foreground">
-                          {lead.source.replace(/_/g, ' ')}
-                        </span>
-                        {lead.budgetMaxInr && (
-                          <span className="font-semibold text-foreground">
-                            {formatInrCompact(lead.budgetMaxInr)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <LeadsKanban stages={stageFilter === 'ALL' ? LEAD_STAGES : [stageFilter]} leads={filteredLeads}
+          pending={pendingStageId} canMove={canMove} onOpen={(lead) => { setStageError(null); setSelectedLead(lead); }} onMove={requestStageMove} />
       ) : (
         <DataTable
           data={filteredLeads}
-          searchPlaceholder="Search lead name, phone, email, or source..."
+          showSearch={false}
+          emptyMessage="No leads match these filters."
           columns={[
             {
               id: 'customerType',
-              header: 'Status',
+              header: 'Contact Type',
               cell: ({ row }) =>
-                row.original.isCustomer || row.original.stage === 'BOOKED' || row.original.stage === 'CLOSED' ? (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                    Customer
+                isCustomer(row.original) ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 dark:bg-emerald-950 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
+                    <Star className="h-3 w-3 fill-emerald-600 text-emerald-600" />
+                    Customer (Buyer)
                   </span>
                 ) : (
-                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 dark:bg-sky-950 px-2.5 py-0.5 text-[10px] font-bold text-sky-800 dark:text-sky-300">
+                    <UserPlus className="h-3 w-3 text-sky-600" />
                     Prospect
                   </span>
                 ),
@@ -608,23 +648,31 @@ export function LeadsCrmPage() {
               header: 'Actions',
               cell: ({ row }) => (
                 <div className="flex items-center gap-1.5">
-                  {!row.original.isCustomer && row.original.stage !== 'BOOKED' && row.original.stage !== 'CLOSED' && (
+                  {!isCustomer(row.original) && (
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
-                      className="h-7 text-xs text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50"
-                      title="Convert to Customer"
+                      className="h-7 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 gap-1"
+                      title="Convert to verified Flat Buyer Customer"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleConvertToCustomer(row.original);
+                        handleOpenConvertModal(row.original);
                       }}
                     >
-                      <UserCheck className="h-3.5 w-3.5 mr-1" />
-                      Convert
+                      <UserCheck className="h-3.5 w-3.5" />
+                      Convert to Customer
                     </Button>
                   )}
-                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setSelectedLead(row.original)}>
-                    Open 360°
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => {
+                      setStageError(null);
+                      setSelectedLead(row.original);
+                    }}
+                  >
+                    Open Details
                   </Button>
                 </div>
               ),
@@ -644,58 +692,49 @@ export function LeadsCrmPage() {
                     <DialogTitle className="text-lg">
                       {selectedLead.customerName}
                     </DialogTitle>
-                    {selectedLead.isCustomer || selectedLead.stage === 'BOOKED' || selectedLead.stage === 'CLOSED' ? (
-                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                        Verified Customer
+                    {isCustomer(selectedLead) ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 dark:bg-emerald-950 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
+                        <Star className="h-3 w-3 fill-emerald-600 text-emerald-600" />
+                        Verified Customer (Flat Buyer)
                       </span>
                     ) : (
-                      <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-[10px] font-bold text-sky-800 dark:bg-sky-950 dark:text-sky-300">
-                        Prospect
+                      <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 dark:bg-sky-950 px-2.5 py-0.5 text-[10px] font-bold text-sky-800 dark:text-sky-300">
+                        <UserPlus className="h-3 w-3 text-sky-600" />
+                        Prospect Enquiry
                       </span>
                     )}
                   </div>
                   <StatusBadge status={selectedLead.stage} />
                 </div>
                 <DialogDescription>
-                  Phone: {selectedLead.normalizedPhone} • Source: {selectedLead.source} • Score: {selectedLead.leadScore}/100 •
+                  Phone: {selectedLead.normalizedPhone || selectedLead.phone} • Source: {selectedLead.source} • Score: {selectedLead.leadScore}/100 •
                   Qualification: {selectedLead.qualificationStatus}
+                  {selectedLead.customerConvertedAt && (
+                    <span className="block mt-1 text-emerald-700 dark:text-emerald-400 font-medium">
+                      ✓ Converted to Customer on {new Date(selectedLead.customerConvertedAt).toLocaleDateString()}
+                    </span>
+                  )}
                 </DialogDescription>
               </DialogHeader>
 
               <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
-                {!selectedLead.isCustomer && selectedLead.stage !== 'BOOKED' && selectedLead.stage !== 'CLOSED' && (
+                {!isCustomer(selectedLead) && (
                   <Button
                     variant="default"
                     size="sm"
                     className="h-8 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
                     disabled={busy}
-                    onClick={() => handleConvertToCustomer(selectedLead)}
+                    onClick={() => handleOpenConvertModal(selectedLead)}
                   >
                     <UserCheck className="h-3.5 w-3.5" />
                     Convert to Customer
                   </Button>
                 )}
-                <Select
-                  value={selectedLead.stage}
-                  onValueChange={(v) => handleStageChange(selectedLead, v as LeadStage)}
-                >
-                  <SelectTrigger className="w-48 h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[...LEAD_PIPELINE_ORDER, 'LOST', 'UNQUALIFIED'].map((st) => (
-                      <SelectItem key={st} value={st}>
-                        {st.replace(/_/g, ' ')}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  placeholder="Lost/Unqualified reason (if applicable)"
-                  className="h-8 w-56 text-xs"
-                  value={lostReason}
-                  onChange={(e) => setLostReason(e.target.value)}
-                />
+                {canMove() && <Select value={selectedLead.stage} disabled={pendingStageId !== null}
+                  onValueChange={(value) => requestStageMove(selectedLead, value as LeadStage)}>
+                  <SelectTrigger aria-label="Change lead stage" className="h-8 w-44 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>{LEAD_STAGES.map((stage) => <SelectItem key={stage} value={stage}>{stageLabel(stage)}</SelectItem>)}</SelectContent>
+                </Select>}
                 <Button
                   variant="outline"
                   size="sm"
@@ -707,11 +746,15 @@ export function LeadsCrmPage() {
                 <Button
                   variant="outline"
                   size="sm"
+                  className="gap-1"
                   onClick={() => {
+                    const n = encodeURIComponent(selectedLead.customerName);
+                    const p = encodeURIComponent(selectedLead.phone || selectedLead.normalizedPhone);
+                    navigate(`/app/visits?leadId=${selectedLead.id}&name=${n}&phone=${p}`);
                     setSelectedLead(null);
-                    navigate('/app/visits');
                   }}
                 >
+                  <CalendarClock className="h-3.5 w-3.5 text-primary" />
                   Schedule Site Visit
                 </Button>
                 <Button
@@ -740,6 +783,51 @@ export function LeadsCrmPage() {
                 </Button>
               </div>
 
+              {/* Linked Site Visits History */}
+              {leadVisits.length > 0 && (
+                <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+                  <div className="text-xs font-semibold text-foreground flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <CalendarClock className="h-3.5 w-3.5 text-primary" />
+                      Scheduled Site Visits ({leadVisits.length})
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[11px] text-primary"
+                      onClick={() => {
+                        const n = encodeURIComponent(selectedLead.customerName);
+                        const p = encodeURIComponent(selectedLead.phone || selectedLead.normalizedPhone);
+                        navigate(`/app/visits?leadId=${selectedLead.id}&name=${n}&phone=${p}`);
+                        setSelectedLead(null);
+                      }}
+                    >
+                      + Book Another Visit
+                    </Button>
+                  </div>
+                  <div className="space-y-1.5">
+                    {leadVisits.map((v) => (
+                      <div
+                        key={v.id}
+                        className="flex items-center justify-between rounded bg-background p-2 border border-border text-xs"
+                      >
+                        <div>
+                          <div className="font-medium text-foreground">
+                            {new Date(v.scheduledStartAt).toLocaleString([], {
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            })}
+                          </div>
+                          {v.notes && <div className="text-[11px] text-muted-foreground">{v.notes}</div>}
+                        </div>
+                        <StatusBadge status={v.status} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {stageError && <p role="alert" className="text-sm text-destructive">{stageError}</p>}
               <div className="grid gap-4 md:grid-cols-2">
                 <form onSubmit={handleAddActivity} className="space-y-2.5">
                   <div className="text-xs font-semibold">Log Note, Call, Task or Follow-Up</div>
@@ -849,7 +937,7 @@ export function LeadsCrmPage() {
               </div>
               <div className="space-y-1">
                 <Label>Max Budget (INR)</Label>
-                <Input type="number" value={budgetMax} onChange={(e) => setBudgetMax(e.target.value)} />
+                <Input type="number" min={0} value={budgetMax} onChange={(e) => setBudgetMax(e.target.value)} />
               </div>
               <div className="space-y-1">
                 <Label>BHK Preference</Label>
@@ -857,9 +945,10 @@ export function LeadsCrmPage() {
               </div>
               <div className="space-y-1">
                 <Label>Buying Timeline</Label>
-                <Select value={timeline} onValueChange={(v: any) => setTimeline(v)}>
+                <Select value={timeline || "UNSPECIFIED"} onValueChange={(value) => setTimeline(value === "UNSPECIFIED" ? "" : value as typeof timeline)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="UNSPECIFIED">Not specified</SelectItem>
                     <SelectItem value="IMMEDIATE">Immediate</SelectItem>
                     <SelectItem value="1_TO_3_MONTHS">1–3 Months</SelectItem>
                     <SelectItem value="3_TO_6_MONTHS">3–6 Months</SelectItem>
@@ -878,6 +967,88 @@ export function LeadsCrmPage() {
           </form>
         </DialogContent>
       </Dialog>
+      <Dialog open={Boolean(reasonMove)} onOpenChange={(open) => { if (!open && !pendingStageId) setReasonMove(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Mark as {reasonMove && stageLabel(reasonMove.stage)}</DialogTitle>
+            <DialogDescription>Add a reason for moving {reasonMove?.lead.customerName}.</DialogDescription>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={(event) => {
+            event.preventDefault();
+            if (reasonMove && lostReason.trim().length >= 2) void saveStage(reasonMove.lead, reasonMove.stage, lostReason.trim());
+          }}>
+            <Label htmlFor="stage-reason">Reason</Label>
+            <Textarea id="stage-reason" required minLength={2} maxLength={500} value={lostReason} onChange={(event) => setLostReason(event.target.value)} />
+            {stageError && <p role="alert" className="text-sm text-destructive">{stageError}</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" disabled={Boolean(pendingStageId)} onClick={() => setReasonMove(null)}>Cancel</Button>
+              <Button type="submit" disabled={Boolean(pendingStageId) || lostReason.trim().length < 2}>Move lead</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Convert to Customer Modal */}
+      <Dialog open={convertModalOpen} onOpenChange={setConvertModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+              <UserCheck className="h-5 w-5" />
+              Convert Lead to Customer
+            </DialogTitle>
+            <DialogDescription>
+              Customers are individuals who purchase a flat. This converts {convertTargetLead?.customerName} from an enquiry prospect to an authorized flat buyer customer.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleConfirmConvert} className="space-y-3">
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs space-y-1">
+              <div className="font-bold text-foreground flex items-center justify-between">
+                <span>{convertTargetLead?.customerName}</span>
+                <span className="text-[10px] rounded bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 px-1.5 py-0.5 font-medium">
+                  Ready to Convert
+                </span>
+              </div>
+              <div className="text-muted-foreground">
+                Phone: {convertTargetLead?.normalizedPhone || convertTargetLead?.phone}
+                {convertTargetLead?.email ? ` • ${convertTargetLead.email}` : ''}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs">Purchased Flat / Unit Number (Optional)</Label>
+              <Input
+                placeholder="e.g. Tower 1 - Flat 402"
+                value={convertFlat}
+                onChange={(e) => setConvertFlat(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs">Purchase / Conversion Notes</Label>
+              <Input
+                placeholder="e.g. Booking token received, agreement signing scheduled"
+                value={convertNotes}
+                onChange={(e) => setConvertNotes(e.target.value)}
+              />
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setConvertModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={busy}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+              >
+                {busy ? 'Converting...' : 'Confirm Customer Conversion'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }

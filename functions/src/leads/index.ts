@@ -192,55 +192,53 @@ export async function updateLeadStageService(
     orgId: string;
     leadId: string;
     stage: LeadStage;
+    expectedStage?: LeadStage;
     lostReason?: string;
     qualificationStatus?: Lead['qualificationStatus'];
   }
 ): Promise<Lead> {
   const ref = db.collection('leads').doc(params.leadId);
-  const snap = await ref.get();
-  if (!snap.exists || snap.data()?.orgId !== params.orgId) {
-    throw new HttpsError('not-found', 'Lead not found.');
-  }
-
-  if (
-    (params.stage === 'LOST' || params.stage === 'UNQUALIFIED') &&
-    (!params.lostReason || params.lostReason.trim().length < 2)
-  ) {
+  const reason = params.lostReason?.trim();
+  const requiresReason = params.stage === 'LOST' || params.stage === 'UNQUALIFIED';
+  if (requiresReason && (!reason || reason.length < 2)) {
     throw new HttpsError('invalid-argument', 'Reason is required when marking a lead Lost or Unqualified.');
   }
 
-  const prev = snap.data() as Lead;
-  const nowIso = new Date().toISOString();
-  const nextScore = computeDeterministicLeadScore({
-    ...prev,
-    stage: params.stage,
-    qualificationStatus: params.qualificationStatus ?? prev.qualificationStatus,
+  return db.runTransaction(async (tx) => {
+    const prev = (await tx.get(ref)).data() as Lead | undefined;
+    if (!prev || prev.orgId !== params.orgId) {
+      throw new HttpsError('not-found', 'Lead not found.');
+    }
+    if (params.expectedStage && prev.stage !== params.expectedStage) {
+      throw new HttpsError('failed-precondition', 'This lead changed stage elsewhere. Check its current stage and try again.');
+    }
+    if (prev.stage === params.stage && !params.qualificationStatus) return prev;
+
+    const qualificationStatus = params.qualificationStatus ?? prev.qualificationStatus;
+    const now = new Date().toISOString();
+    const changes = {
+      stage: params.stage,
+      lostReason: requiresReason ? (reason ?? '') : '',
+      ...(qualificationStatus ? { qualificationStatus } : {}),
+      leadScore: computeDeterministicLeadScore({ ...prev, stage: params.stage, qualificationStatus }),
+      updatedAt: now,
+    };
+    tx.update(ref, changes);
+    if (prev.stage !== params.stage) {
+      const activity = db.collection('lead_activities').doc();
+      tx.set(activity, {
+        id: activity.id,
+        orgId: params.orgId,
+        leadId: prev.id,
+        type: 'STAGE_CHANGE',
+        title: 'Moved from ' + prev.stage + ' to ' + params.stage,
+        ...(requiresReason && reason ? { body: reason } : {}),
+        performedByUid: actor.uid,
+        createdAt: now,
+      } satisfies LeadActivity);
+    }
+    return { ...prev, ...changes };
   });
-
-  const updated: Lead = {
-    ...prev,
-    stage: params.stage,
-    lostReason: params.lostReason ?? prev.lostReason,
-    qualificationStatus: params.qualificationStatus ?? prev.qualificationStatus,
-    leadScore: nextScore,
-    updatedAt: nowIso,
-  };
-
-  await ref.set(updated);
-
-  const actRef = db.collection('lead_activities').doc();
-  await actRef.set({
-    id: actRef.id,
-    orgId: params.orgId,
-    leadId: updated.id,
-    type: 'STAGE_CHANGE',
-    title: `Pipeline Stage: ${prev.stage} -> ${updated.stage}`,
-    body: params.lostReason,
-    performedByUid: actor.uid,
-    createdAt: nowIso,
-  } satisfies LeadActivity);
-
-  return updated;
 }
 
 export async function convertLeadToCustomerService(
@@ -249,6 +247,7 @@ export async function convertLeadToCustomerService(
   params: {
     orgId: string;
     leadId: string;
+    unitId?: string;
     notes?: string;
   }
 ): Promise<Lead> {
@@ -260,6 +259,14 @@ export async function convertLeadToCustomerService(
 
   const prev = snap.data() as Lead;
   const nowIso = new Date().toISOString();
+
+  let unitNumberNotice = '';
+  if (params.unitId) {
+    const uSnap = await db.collection('units').doc(params.unitId).get();
+    if (uSnap.exists && uSnap.data()?.orgId === params.orgId) {
+      unitNumberNotice = ` for Flat ${uSnap.data()?.unitNumber}`;
+    }
+  }
 
   const updated: Lead = {
     ...prev,
@@ -277,8 +284,10 @@ export async function convertLeadToCustomerService(
     orgId: params.orgId,
     leadId: updated.id,
     type: 'STAGE_CHANGE',
-    title: 'Converted from Prospect to Customer',
-    body: params.notes || `Prospect ${prev.customerName} successfully converted to verified buyer customer.`,
+    title: `Converted from Prospect to Customer${unitNumberNotice}`,
+    body: params.notes
+      ? `${params.notes}${unitNumberNotice ? ` (${unitNumberNotice.trim()})` : ''}`
+      : `Prospect ${prev.customerName} successfully converted to verified buyer customer${unitNumberNotice}.`,
     performedByUid: actor.uid,
     createdAt: nowIso,
   } satisfies LeadActivity);
@@ -317,24 +326,27 @@ export const convertLeadToCustomer = onCall(async (request) => {
   return convertLeadToCustomerService(adminDb, actor, input);
 });
 
+const leadStageSchema = z.enum([
+  'NEW',
+  'CONTACTED',
+  'QUALIFIED',
+  'INTERESTED',
+  'VISIT_SCHEDULED',
+  'VISITED',
+  'NEGOTIATION',
+  'BOOKED',
+  'CLOSED',
+  'LOST',
+  'UNQUALIFIED',
+]);
+
 export const updateLeadStage = onCall(async (request) => {
   const schema = z.object({
     orgId: z.string().min(1),
     leadId: z.string().min(1),
-    stage: z.enum([
-      'NEW',
-      'CONTACTED',
-      'QUALIFIED',
-      'INTERESTED',
-      'VISIT_SCHEDULED',
-      'VISITED',
-      'NEGOTIATION',
-      'BOOKED',
-      'CLOSED',
-      'LOST',
-      'UNQUALIFIED',
-    ]),
-    lostReason: z.string().optional(),
+    stage: leadStageSchema,
+    expectedStage: leadStageSchema.optional(),
+    lostReason: z.string().trim().max(500).optional(),
     qualificationStatus: z
       .enum(['UNREVIEWED', 'HOT', 'WARM', 'COLD', 'DISQUALIFIED'])
       .optional(),

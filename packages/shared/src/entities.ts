@@ -152,6 +152,9 @@ export interface Project {
   locality: string;
   address: string;
   coordinates?: { lat: number; lng: number };
+  postalCode?: string;
+  landmark?: string;
+  description?: string;
   currencyCode?: CurrencyCode;
   areaUnit?: AreaUnitCode;
   timezone?: string;
@@ -283,6 +286,13 @@ export type FacingDirection =
   | 'SOUTH_EAST'
   | 'SOUTH_WEST';
 
+export interface RoomDetail {
+  name: string;
+  type: 'BEDROOM' | 'BATHROOM' | 'LIVING' | 'DINING' | 'KITCHEN' | 'BALCONY' | 'STUDY' | 'UTILITY' | 'OTHER';
+  lengthFt?: number;
+  widthFt?: number;
+}
+
 export interface Unit {
   id: string;
   orgId: string;
@@ -308,6 +318,11 @@ export interface Unit {
   viewType?: string; // e.g., "CENTRAL_PARK", "POOL", "CITY", "STANDARD"
   isCorner: boolean;
   balconiesCount: number;
+  bedroomsCount?: number;
+  bathroomsCount?: number;
+  furnishing?: 'UNFURNISHED' | 'SEMI_FURNISHED' | 'FULLY_FURNISHED';
+  roomDetails?: RoomDetail[];
+  unitAmenities?: string[];
   parkingEntitlementCount: number; // Entitlement count (distinct from physical assigned slots)
   assignedParkingSlotIds: string[]; // Physical parking slot IDs allocated
   pricingMode?: UnitPricingMode;

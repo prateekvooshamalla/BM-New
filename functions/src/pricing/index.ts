@@ -5,10 +5,10 @@ import {
   calculateCostSheet,
   canTransitionPriceBook,
   formatCurrency,
-  isPriceBookImmutable,
   type CostSheetLineItemRule,
   type CostSheetTemplate,
   type PriceBook,
+  type ParkingSlot,
   type PriceRevision,
   type PricingScopeOverride,
   type Unit,
@@ -113,82 +113,103 @@ export async function applyPriceBookToInventory(
   ]);
 
   const overrides = overridesSnap.docs.map((d) => d.data() as PricingScopeOverride);
-
   let updatedUnitsCount = 0;
   let revisionsCreated = 0;
-  const batch = db.batch();
 
-  for (const unitDoc of unitsSnap.docs) {
-    const unit = unitDoc.data() as Unit;
-    if (
-      unit.status === 'BOOKED' ||
-      unit.status === 'AGREEMENT' ||
-      unit.status === 'REGISTERED'
-    ) {
-      continue; // Sold/booked units retain their contracted booking price
-    }
+  // Re-read inventory transactionally so a concurrent booking or edit cannot be
+  // overwritten. Two writes per unit keep each chunk below Firestore's limit.
+  for (let start = 0; start < unitsSnap.docs.length; start += 200) {
+    const chunk = unitsSnap.docs.slice(start, start + 200);
+    const result = await db.runTransaction(async (tx) => {
+      const unitSnaps = await Promise.all(chunk.map((doc) => tx.get(doc.ref)));
+      const slotIds = Array.from(new Set(unitSnaps.flatMap((doc) =>
+        (doc.data() as Unit | undefined)?.assignedParkingSlotIds ?? []
+      )));
+      const slotSnaps = await Promise.all(slotIds.map((id) => tx.get(db.collection('parking_slots').doc(id))));
+      const parkingByUnit = new Map<string, ParkingSlot[]>();
+      for (const doc of slotSnaps) {
+        const slot = doc.data() as ParkingSlot | undefined;
+        if (slot?.orgId === orgId && slot.projectId === projectId && slot.status === 'ALLOCATED' && slot.allocatedUnitId) {
+          parkingByUnit.set(slot.allocatedUnitId, [...(parkingByUnit.get(slot.allocatedUnitId) ?? []), slot]);
+        }
+      }
+      let updatedUnitsCount = 0;
+      let revisionsCreated = 0;
 
-    const oldTotal = unit.calculatedTotalPrice;
-    const oldBaseRate = unit.baseRatePerSqft;
-    const computed = calculateCostSheet({
-      unit: { ...unit, baseRatePerSqft: undefined },
-      priceBook,
-      overrides,
+      for (const unitDoc of unitSnaps) {
+        if (!unitDoc.exists) continue;
+        const unit = unitDoc.data() as Unit;
+        if (
+          unit.status === 'BOOKED' ||
+          unit.status === 'AGREEMENT' ||
+          unit.status === 'REGISTERED'
+        ) {
+          continue; // Sold/booked units retain their contracted booking price
+        }
+
+        const oldTotal = unit.calculatedTotalPrice;
+        const oldBaseRate = unit.baseRatePerSqft;
+        const computed = calculateCostSheet({
+          unit: { ...unit, baseRatePerSqft: undefined },
+          priceBook,
+          overrides,
+          allocatedParkingSlots: parkingByUnit.get(unit.id),
+        });
+
+        const newTotal = computed.totalPayableInr;
+        const premiumSum =
+          computed.facingPremiumInr +
+          computed.viewPremiumInr +
+          computed.cornerPremiumInr +
+          computed.locationPremiumInr +
+          computed.unitSpecificPremiumInr;
+
+        tx.update(unitDoc.ref, {
+          baseRatePerSqft: computed.baseRatePerSqft,
+          activePriceBookId: priceBook.id,
+          floorRiseAmount: computed.floorRiseInr,
+          premiumChargesAmount: premiumSum,
+          calculatedTotalPrice: newTotal,
+          calculatedTotalMinor: computed.totalPayableMinor,
+          updatedAt: nowIso,
+        });
+        updatedUnitsCount++;
+
+        if (oldTotal !== newTotal || oldBaseRate !== computed.baseRatePerSqft) {
+          const revRef = db.collection('price_revisions').doc();
+          const changeAmount = newTotal - oldTotal;
+          const changePct =
+            oldTotal > 0 ? Number(((changeAmount / oldTotal) * 100).toFixed(2)) : 0;
+
+          const revision: PriceRevision = {
+            id: revRef.id,
+            orgId,
+            projectId,
+            unitId: unit.id,
+            unitNumber: unit.unitNumber,
+            previousPriceBookId: previousPriceBookId ?? unit.activePriceBookId ?? null,
+            newPriceBookId: priceBook.id,
+            priceBookVersion: priceBook.versionNumber,
+            oldBaseRate,
+            newBaseRate: computed.baseRatePerSqft,
+            oldTotalValue: oldTotal,
+            newTotalValue: newTotal,
+            changeAmount,
+            changePct,
+            effectiveDate: priceBook.effectiveFrom,
+            changedByUid: actor.uid,
+            approvedByUid: priceBook.approvedByUid ?? actor.uid,
+            reason,
+            createdAt: nowIso,
+          };
+          tx.set(revRef, revision);
+          revisionsCreated++;
+        }
+      }
+      return { updatedUnitsCount, revisionsCreated };
     });
-
-    const newTotal = computed.totalPayableInr;
-    const premiumSum =
-      computed.facingPremiumInr +
-      computed.viewPremiumInr +
-      computed.cornerPremiumInr +
-      computed.locationPremiumInr +
-      computed.unitSpecificPremiumInr;
-
-    batch.update(unitDoc.ref, {
-      baseRatePerSqft: computed.baseRatePerSqft,
-      activePriceBookId: priceBook.id,
-      floorRiseAmount: computed.floorRiseInr,
-      premiumChargesAmount: premiumSum,
-      calculatedTotalPrice: newTotal,
-      calculatedTotalMinor: computed.totalPayableMinor,
-      updatedAt: nowIso,
-    });
-    updatedUnitsCount++;
-
-    if (oldTotal !== newTotal || oldBaseRate !== computed.baseRatePerSqft) {
-      const revRef = db.collection('price_revisions').doc();
-      const changeAmount = newTotal - oldTotal;
-      const changePct =
-        oldTotal > 0 ? Number(((changeAmount / oldTotal) * 100).toFixed(2)) : 0;
-
-      const revision: PriceRevision = {
-        id: revRef.id,
-        orgId,
-        projectId,
-        unitId: unit.id,
-        unitNumber: unit.unitNumber,
-        previousPriceBookId: previousPriceBookId ?? unit.activePriceBookId ?? null,
-        newPriceBookId: priceBook.id,
-        priceBookVersion: priceBook.versionNumber,
-        oldBaseRate,
-        newBaseRate: computed.baseRatePerSqft,
-        oldTotalValue: oldTotal,
-        newTotalValue: newTotal,
-        changeAmount,
-        changePct,
-        effectiveDate: priceBook.effectiveFrom,
-        changedByUid: actor.uid,
-        approvedByUid: priceBook.approvedByUid ?? actor.uid,
-        reason,
-        createdAt: nowIso,
-      };
-      batch.set(revRef, revision);
-      revisionsCreated++;
-    }
-  }
-
-  if (updatedUnitsCount > 0) {
-    await batch.commit();
+    updatedUnitsCount += result.updatedUnitsCount;
+    revisionsCreated += result.revisionsCreated;
   }
 
   return { updatedUnitsCount, revisionsCreated };
@@ -201,12 +222,16 @@ export async function savePriceBookDraftService(
   rawInput: unknown
 ): Promise<PriceBook> {
   const input = parseCallableInput(upsertPriceBookSchema, rawInput);
+  const project = await db.collection('projects').doc(input.projectId).get();
+  if (!project.exists || project.data()?.orgId !== input.orgId) {
+    throw new HttpsError('not-found', 'Project not found.');
+  }
   const nowIso = new Date().toISOString();
 
   if (input.priceBookId) {
     const existingRef = db.collection('price_books').doc(input.priceBookId);
     const existingSnap = await existingRef.get();
-    if (!existingSnap.exists || existingSnap.data()?.orgId !== input.orgId) {
+    if (!existingSnap.exists || existingSnap.data()?.orgId !== input.orgId || existingSnap.data()?.projectId !== input.projectId) {
       throw new HttpsError('not-found', 'Price book not found.');
     }
     const existing = existingSnap.data() as PriceBook;
@@ -417,10 +442,10 @@ export async function clonePriceBookVersionService(
   db: Firestore,
   actor: AuthenticatedActor,
   actorRole: string,
-  params: { orgId: string; sourcePriceBookId: string; newName?: string }
+  params: { orgId: string; projectId?: string; sourcePriceBookId: string; newName?: string }
 ): Promise<PriceBook> {
   const sourceSnap = await db.collection('price_books').doc(params.sourcePriceBookId).get();
-  if (!sourceSnap.exists || sourceSnap.data()?.orgId !== params.orgId) {
+  if (!sourceSnap.exists || sourceSnap.data()?.orgId !== params.orgId || (params.projectId && sourceSnap.data()?.projectId !== params.projectId)) {
     throw new HttpsError('not-found', 'Source price book not found.');
   }
   const source = sourceSnap.data() as PriceBook;
@@ -472,11 +497,11 @@ export async function submitPriceBookForApprovalService(
   db: Firestore,
   actor: AuthenticatedActor,
   actorName: string,
-  params: { orgId: string; priceBookId: string }
+  params: { orgId: string; projectId?: string; priceBookId: string }
 ): Promise<PriceBook> {
   const pbRef = db.collection('price_books').doc(params.priceBookId);
   const snap = await pbRef.get();
-  if (!snap.exists || snap.data()?.orgId !== params.orgId) {
+  if (!snap.exists || snap.data()?.orgId !== params.orgId || (params.projectId && snap.data()?.projectId !== params.projectId)) {
     throw new HttpsError('not-found', 'Price book not found.');
   }
   const pb = snap.data() as PriceBook;
@@ -533,11 +558,11 @@ export async function activatePriceBookService(
   db: Firestore,
   actor: AuthenticatedActor,
   actorRole: string,
-  params: { orgId: string; priceBookId: string; reason: string }
+  params: { orgId: string; projectId?: string; priceBookId: string; reason: string }
 ): Promise<{ activatedBook: PriceBook; updatedUnitsCount: number; revisionsCreated: number }> {
   const pbRef = db.collection('price_books').doc(params.priceBookId);
   const pbSnap = await pbRef.get();
-  if (!pbSnap.exists || pbSnap.data()?.orgId !== params.orgId) {
+  if (!pbSnap.exists || pbSnap.data()?.orgId !== params.orgId || (params.projectId && pbSnap.data()?.projectId !== params.projectId)) {
     throw new HttpsError('not-found', 'Price book not found.');
   }
 
@@ -766,6 +791,12 @@ export const savePriceBookDraft = onCall(async (request) => {
     'pricing:edit_draft',
     parsed.projectId
   );
+  const existing = parsed.priceBookId
+    ? await adminDb.collection('price_books').doc(parsed.priceBookId).get()
+    : null;
+  if (parsed.applyToInventory || existing?.data()?.status === 'ACTIVE') {
+    await requireOrgPermission(request, parsed.orgId, 'pricing:activate', parsed.projectId);
+  }
   return savePriceBookDraftService(adminDb, actor, member?.role ?? 'PLATFORM_SUPER_ADMIN', parsed);
 });
 
@@ -889,18 +920,22 @@ export async function ensureBaselinePriceBookForProject(
     return activeBook.data() as PriceBook;
   }
 
-  // If there's an existing DRAFT book, ensure its base rate reflects inventory if it was not customized
+  // Preserve configured drafts when more inventory is added.
   const draftBookDoc = existingBooksSnap.docs.find((d) => (d.data() as PriceBook).status === 'DRAFT');
   if (draftBookDoc) {
-    const draftBook = draftBookDoc.data() as PriceBook;
-    if (params.baseRatePerSqft > 0 && draftBook.basePricePerSqft !== params.baseRatePerSqft) {
-      await draftBookDoc.ref.update({
-        basePricePerSqft: params.baseRatePerSqft,
-        updatedAt: nowIso,
-      });
-      return { ...draftBook, basePricePerSqft: params.baseRatePerSqft, updatedAt: nowIso };
+    const draft = draftBookDoc.data() as PriceBook;
+    // Towers create a placeholder before inventory exists. Initialize that untouched
+    // placeholder from the first unit, then preserve future user edits.
+    if (draft.description === 'Auto-generated Version 1 pricing baseline from project inventory setup.'
+      && draft.createdAt === draft.updatedAt && params.baseRatePerSqft > 0) {
+      const units = await db.collection('units').where('orgId', '==', params.orgId).where('projectId', '==', params.projectId).limit(2).get();
+      if (units.size === 1 && draft.basePricePerSqft !== params.baseRatePerSqft) {
+        const updated = { ...draft, basePricePerSqft: params.baseRatePerSqft, updatedAt: nowIso };
+        await draftBookDoc.ref.set(updated);
+        return updated;
+      }
     }
-    return draftBook;
+    return draft;
   }
 
   // Fetch project to align currency and area unit

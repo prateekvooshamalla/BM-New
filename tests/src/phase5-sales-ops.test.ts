@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createOrganizationService } from '../../functions/src/organizations';
 import { superAdminAdjustWalletService } from '../../functions/src/billing';
 import { createProjectService } from '../../functions/src/projects';
-import { ingestLeadService } from '../../functions/src/leads';
+import { ingestLeadService, updateLeadStageService } from '../../functions/src/leads';
 import {
   onboardPartnerOrganizationService,
   registerPartnerLeadService,
@@ -28,6 +28,25 @@ const ADMIN = {
 };
 
 describe('Phase 5 — Sales Operations: CRM Dedup, Partner Lead Protection, Visits & WhatsApp', () => {
+  it('saves pipeline moves and history together, requires a loss reason, and rejects stale moves', async () => {
+    const db = createTransactionalTestFirestore({ enforceReadBeforeWrite: true });
+    const { lead } = await ingestLeadService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: 'crm-org', customerName: 'Test Buyer', phone: '+919876543211',
+      source: 'MANUAL', whatsappOptIn: false,
+    });
+    const input = { orgId: lead.orgId, leadId: lead.id, expectedStage: 'NEW' as const };
+    await expect(updateLeadStageService(db, ADMIN, { ...input, stage: 'LOST', lostReason: ' ' })).rejects.toThrow(/Reason is required/);
+    const contacted = await updateLeadStageService(db, ADMIN, { ...input, stage: 'CONTACTED' });
+    expect(contacted.stage).toBe('CONTACTED');
+    await expect(updateLeadStageService(db, ADMIN, { ...input, stage: 'QUALIFIED' })).rejects.toThrow(/changed stage elsewhere/);
+    const lost = await updateLeadStageService(db, ADMIN, { ...input, expectedStage: 'CONTACTED', stage: 'LOST', lostReason: ' Bought elsewhere ' });
+    expect(lost.lostReason).toBe('Bought elsewhere');
+    expect((await db.collection('leads').doc(lead.id).get()).data()?.stage).toBe('LOST');
+    const history = await db.collection('lead_activities').where('type', '==', 'STAGE_CHANGE').get();
+    expect(history.size).toBe(2);
+    expect(history.docs.some((entry) => entry.data()?.body === 'Bought elsewhere')).toBe(true);
+  });
+
   it('enforces channel partner lead protection, prevents silent ownership override, and resolves conflicts', async () => {
     const db = createTransactionalTestFirestore();
     const { organization } = await createOrganizationService(db, ADMIN, {

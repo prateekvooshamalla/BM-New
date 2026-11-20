@@ -480,14 +480,15 @@ export async function commitApprovedInventoryDraftService(
     const structBatch = db.batch();
     let structOps = 0;
 
-    if (isTowerBased && !targetTowerId && verifiedDraft.towerSpec.name) {
+    const towerName = verifiedDraft.towerSpec.name;
+    if (isTowerBased && !targetTowerId && towerName) {
       const existingTowers = await db
         .collection('towers')
         .where('orgId', '==', input.orgId)
         .where('projectId', '==', project.id)
         .get();
       const existingMatch = existingTowers.docs.find(
-        (d) => (d.data() as Tower).name.trim().toLowerCase() === verifiedDraft.towerSpec.name.trim().toLowerCase()
+        (d) => (d.data() as Tower).name.trim().toLowerCase() === towerName.trim().toLowerCase()
       );
 
       if (existingMatch) {
@@ -496,11 +497,11 @@ export async function commitApprovedInventoryDraftService(
       } else {
         const code = (
           verifiedDraft.towerSpec.code ||
-          verifiedDraft.towerSpec.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 6) ||
+          towerName.replace(/[^A-Za-z0-9]/g, '').slice(0, 6) ||
           'T1'
         ).toUpperCase();
         targetTowerId = `${verifiedDraft.id}_tw_${sanitizeDocIdToken(code)}`;
-        targetTowerName = verifiedDraft.towerSpec.name.trim();
+        targetTowerName = towerName.trim();
 
         const towerDoc: Tower = {
           id: targetTowerId,

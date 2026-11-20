@@ -18,16 +18,15 @@ import {
   Lock,
   Plus,
   Share2,
-  Sparkles,
   TrendingUp,
   Unlock,
-  UserCheck,
   UserPlus,
   Users,
 } from 'lucide-react';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
   calculateCostSheet,
+  getQuotationPriceBooks,
   formatAreaSqft,
   formatInr,
   formatInrCompact,
@@ -46,6 +45,11 @@ import {
   type UnitStatus,
   type UnitType,
 } from '@bharat-makaan/shared';
+import { InventorySetupWizard } from '@/features/inventory/components/InventorySetupWizard';
+import { ProjectDetailsSummary, UnitRoomSummary } from '@/features/inventory/components/InventoryDetailsSummary';
+import { UnitRoomFields } from '@/features/inventory/components/InventorySetupFields';
+import { createUnitDraft, roomPayload } from '@/features/inventory/components/inventory-setup';
+import { useProjectPricingContext } from '@/features/pricing/hooks/useProjectPricingContext';
 import { callBackendFunction, storage } from '@/lib/firebase';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
@@ -74,6 +78,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 const FACING_OPTIONS: FacingDirection[] = [
   'EAST',
@@ -96,15 +101,42 @@ const STATUS_OPTIONS: UnitStatus[] = [
 ];
 
 export function ProjectsAndInventoryPage() {
+  const { activeOrgId, activeProjectId, projects, setProjects, selectProject } = useTenantStore();
+  const { id } = useParams<{ id?: string }>();
+  const navigate = useNavigate();
+  const [setup, setSetup] = React.useState<{ mode: 'project' | 'edit' | 'unit'; project?: Project; towers?: Tower[] } | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  React.useEffect(() => { setSetup(null); setNotice(null); }, [activeOrgId]);
+  return <div className="space-y-4">
+    {notice && <div role="status" className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{notice}</div>}
+    <ProjectInventoryWorkspace key={`${activeOrgId}:${id ?? activeProjectId ?? projects[0]?.id ?? ''}`}
+      onStartProject={() => setSetup({ mode: 'project' })}
+      onEditProject={(project) => setSetup({ mode: 'edit', project })}
+      onStartUnit={(project, towers) => setSetup({ mode: 'unit', project, towers })} />
+    {setup && activeOrgId && <InventorySetupWizard key={`${activeOrgId}:${setup.mode}:${setup.project?.id ?? ''}`}
+      mode={setup.mode} project={setup.project} towers={setup.towers}
+      onClose={() => setSetup(null)} onComplete={(project, unit) => {
+        const latest = useTenantStore.getState().projects;
+        setProjects(latest.some((item) => item.id === project.id)
+          ? latest.map((item) => item.id === project.id ? setup.mode === 'edit' ? project : { ...item, masterPlanDocumentId: project.masterPlanDocumentId ?? item.masterPlanDocumentId } : item)
+          : [...latest, project]);
+        selectProject(project.id, 'SINGLE_PROJECT'); setSetup(null);
+        setNotice(unit ? `Saved ${project.name} and added unit ${unit.unitNumber} to inventory.` : `Saved ${project.name}. You can add units from Add Inventory.`);
+        if (id) navigate(`/builder/projects/${project.id}`);
+      }} />}
+  </div>;
+}
+
+function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit }: {
+  onStartProject: () => void; onEditProject: (project: Project) => void; onStartUnit: (project: Project, towers: Tower[]) => void;
+}) {
   const navigate = useNavigate();
   const { id: routeProjectId } = useParams<{ id?: string }>();
   const {
     activeOrgId,
-    activeOrganization,
     projects,
     activeProjectId,
     activeProject,
-    setProjects,
     selectProject,
     setSelectedContextEntity,
     setAiDrawerOpen,
@@ -136,31 +168,14 @@ export function ProjectsAndInventoryPage() {
   const [unitSearch, setUnitSearch] = React.useState<string>('');
 
   // Modals & Drawers
-  const [createProjectOpen, setCreateProjectOpen] = React.useState(false);
   const [createPhaseOpen, setCreatePhaseOpen] = React.useState(false);
   const [createTowerOpen, setCreateTowerOpen] = React.useState(false);
-  const [createUnitOpen, setCreateUnitOpen] = React.useState(false);
   const [bulkWizardOpen, setBulkWizardOpen] = React.useState(false);
   const [selectedUnit, setSelectedUnit] = React.useState<Unit | null>(null);
   const [unitAuditHistory, setUnitAuditHistory] = React.useState<AuditEvent[]>([]);
   const [transitionReason, setTransitionReason] = React.useState('');
   const [bannerMsg, setBannerMsg] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
-
-  // Create Project Form
-  const [projName, setProjName] = React.useState('');
-  const [projCode, setProjCode] = React.useState('');
-  const [projCity, setProjCity] = React.useState('');
-  const [projLocality, setProjLocality] = React.useState('');
-  const [projAddress, setProjAddress] = React.useState('');
-  const [projType, setProjType] = React.useState<'APARTMENT' | 'VILLA' | 'PLOTTED' | 'COMMERCIAL' | 'MIXED'>('APARTMENT');
-  const [projRera, setProjRera] = React.useState('');
-  const [projLandAcres, setProjLandAcres] = React.useState('');
-  const [projConfigs, setProjConfigs] = React.useState('2 BHK, 3 BHK, 4 BHK');
-  const [projAmenities, setProjAmenities] = React.useState('Clubhouse, Swimming Pool, EV Charging, Gymnasium, Children Play Area');
-  const [projStatus, setProjStatus] = React.useState<'PRE_LAUNCH' | 'NEW_LAUNCH' | 'UNDER_CONSTRUCTION' | 'NEARING_POSSESSION' | 'READY_TO_MOVE'>('UNDER_CONSTRUCTION');
-  const [projPossession, setProjPossession] = React.useState('');
-  const [projPublished, setProjPublished] = React.useState(false);
 
   // Create Phase / Tower Form
   const [phaseName, setPhaseName] = React.useState('Phase 1');
@@ -171,20 +186,8 @@ export function ProjectsAndInventoryPage() {
   const [towerFloors, setTowerFloors] = React.useState('15');
   const [towerError, setTowerError] = React.useState<string | null>(null);
 
-  // Create Unit Form
-  const [unitTowerId, setUnitTowerId] = React.useState('');
-  const [unitFloorNo, setUnitFloorNo] = React.useState('1');
-  const [unitSeries, setUnitSeries] = React.useState('01');
-  const [unitNumber, setUnitNumber] = React.useState('');
-  const [unitTypeVal, setUnitTypeVal] = React.useState<'APARTMENT' | 'PENTHOUSE' | 'VILLA' | 'PLOT' | 'SHOP' | 'OFFICE'>('APARTMENT');
-  const [unitBhk, setUnitBhk] = React.useState('3 BHK');
-  const [unitSaleable, setUnitSaleable] = React.useState('2200');
-  const [unitCarpet, setUnitCarpet] = React.useState('1540');
-  const [unitFacing, setUnitFacing] = React.useState<FacingDirection>('EAST');
-  const [unitBaseRate, setUnitBaseRate] = React.useState('9500');
-  const [unitParkingEntitled, setUnitParkingEntitled] = React.useState('2');
-  const [unitCorner, setUnitCorner] = React.useState(false);
-  const [unitPublished, setUnitPublished] = React.useState(false);
+  const [bulkRooms, setBulkRooms] = React.useState(createUnitDraft);
+  const [editRooms, setEditRooms] = React.useState(createUnitDraft);
 
   // Edit Unit Form
   const [editUnitOpen, setEditUnitOpen] = React.useState(false);
@@ -218,7 +221,6 @@ export function ProjectsAndInventoryPage() {
     }
     return () => { active = false; };
   }, [selectedUnit?.floorPlanStoragePath]);
-  const [floorPlan, setFloorPlan] = React.useState<File | null>(null);
   const [holdCustomer, setHoldCustomer] = React.useState('');
   const [holdAdvance, setHoldAdvance] = React.useState('0');
   const [holdReference, setHoldReference] = React.useState('');
@@ -278,6 +280,8 @@ export function ProjectsAndInventoryPage() {
   }, [bulkTowerId, bulkStartFloor, bulkEndFloor, units]);
 
   const currentProjectId = activeProjectId ?? projects[0]?.id ?? null;
+  const { parkingSlots, pricingOverrides } = useProjectPricingContext(currentProjectId);
+  const quotationPriceBooks = React.useMemo(() => getQuotationPriceBooks(priceBooks), [priceBooks]);
 
   React.useEffect(() => {
     setSelectedContextEntity({
@@ -355,6 +359,7 @@ export function ProjectsAndInventoryPage() {
       orgId: activeOrgId,
       collectionName: 'payment_plans',
       projectId: currentProjectId,
+      filter: (plan) => plan.isActive,
       onData: setPaymentPlans,
     });
     return () => {
@@ -364,6 +369,10 @@ export function ProjectsAndInventoryPage() {
     };
   }, [activeOrgId, currentProjectId]);
 
+  React.useEffect(() => {
+    setSelectedUnit((previous) => previous ? units.find((unit) => unit.id === previous.id) ?? null : null);
+  }, [units]);
+
   const unitPriceRevisions = React.useMemo(() => {
     if (!selectedUnit) return [];
     return priceRevisions.filter((r) => r.unitId === selectedUnit.id);
@@ -371,12 +380,11 @@ export function ProjectsAndInventoryPage() {
 
   const liveCostSheetPb = React.useMemo(() => {
     return (
-      priceBooks.find((pb) => pb.id === costSheetPbId) ??
-      priceBooks.find((pb) => pb.status === 'ACTIVE') ??
-      priceBooks[0] ??
+      quotationPriceBooks.find((pb) => pb.id === costSheetPbId) ??
+      quotationPriceBooks[0] ??
       null
     );
-  }, [priceBooks, costSheetPbId]);
+  }, [quotationPriceBooks, costSheetPbId]);
 
   const liveCostSheetPlan = React.useMemo(() => {
     return (
@@ -393,6 +401,8 @@ export function ProjectsAndInventoryPage() {
       return calculateCostSheet({
         unit: costSheetUnit,
         priceBook: liveCostSheetPb,
+        overrides: pricingOverrides,
+        allocatedParkingSlots: parkingSlots.filter((slot) => slot.status === 'ALLOCATED' && slot.allocatedUnitId === costSheetUnit.id),
         paymentPlan: liveCostSheetPlan ?? undefined,
         discount: {
           type: costSheetDiscountType,
@@ -402,11 +412,11 @@ export function ProjectsAndInventoryPage() {
     } catch {
       return null;
     }
-  }, [costSheetUnit, liveCostSheetPb, liveCostSheetPlan, costSheetDiscountType, costSheetDiscountVal]);
+  }, [costSheetUnit, liveCostSheetPb, liveCostSheetPlan, costSheetDiscountType, costSheetDiscountVal, parkingSlots, pricingOverrides]);
 
   const handleOpenDirectCostSheet = (unit: Unit) => {
     setCostSheetUnit(unit);
-    const activePb = priceBooks.find((pb) => pb.status === 'ACTIVE') ?? priceBooks[0];
+    const activePb = quotationPriceBooks[0];
     setCostSheetPbId(activePb?.id ?? '');
     const activePlan = paymentPlans.find((p) => p.isActive) ?? paymentPlans[0];
     setCostSheetPlanId(activePlan?.id ?? '');
@@ -414,35 +424,12 @@ export function ProjectsAndInventoryPage() {
     setCostSheetError(null);
     setCostSheetSuccessNotice(null);
 
-    if (unit.heldForLeadId) {
-      const heldLead = customerLeads.find((l) => l.id === unit.heldForLeadId);
-      if (heldLead) {
-        setCostSheetLeadId(heldLead.id);
-        setCostSheetCustName(heldLead.customerName);
-        setCostSheetCustPhone(heldLead.phone);
-        setCostSheetCustEmail(heldLead.email ?? '');
-        setShowInlineNewCustomer(false);
-      } else {
-        setCostSheetLeadId('NEW');
-        setCostSheetCustName('Valued Buyer');
-        setCostSheetCustPhone('+91 9876543210');
-        setCostSheetCustEmail('');
-        setShowInlineNewCustomer(false);
-      }
-    } else if (customerLeads.length > 0) {
-      const firstLead = customerLeads[0]!;
-      setCostSheetLeadId(firstLead.id);
-      setCostSheetCustName(firstLead.customerName);
-      setCostSheetCustPhone(firstLead.phone);
-      setCostSheetCustEmail(firstLead.email ?? '');
-      setShowInlineNewCustomer(false);
-    } else {
-      setCostSheetLeadId('NEW');
-      setCostSheetCustName('Valued Buyer');
-      setCostSheetCustPhone('+91 9876543210');
-      setCostSheetCustEmail('');
-      setShowInlineNewCustomer(false);
-    }
+    const heldLead = customerLeads.find((lead) => lead.id === unit.heldForLeadId);
+    setCostSheetLeadId(heldLead?.id ?? 'NEW');
+    setCostSheetCustName(heldLead?.customerName ?? '');
+    setCostSheetCustPhone(heldLead?.phone ?? '');
+    setCostSheetCustEmail(heldLead?.email ?? '');
+    setShowInlineNewCustomer(!heldLead);
 
     setCostSheetDiscountType('NONE');
     setCostSheetDiscountVal('0');
@@ -474,8 +461,8 @@ export function ProjectsAndInventoryPage() {
     setCostSheetError(null);
     setCostSheetSuccessNotice(null);
 
-    const finalCustName = costSheetCustName.trim() || 'Valued Buyer';
-    const finalCustPhone = costSheetCustPhone.trim() || '+91 9876543210';
+    const finalCustName = costSheetCustName.trim();
+    const finalCustPhone = costSheetCustPhone.trim();
     const finalCustEmail = costSheetCustEmail.trim() || undefined;
 
     if (!finalCustName) {
@@ -491,8 +478,7 @@ export function ProjectsAndInventoryPage() {
     try {
       let finalLeadId = costSheetLeadId !== 'NEW' ? costSheetLeadId : undefined;
       if (!finalLeadId) {
-        try {
-          const leadRes = await callBackendFunction<any, { lead: Lead }>('ingestLead', {
+          const leadRes = await callBackendFunction<unknown, { lead: Lead }>('createLead', {
             orgId: activeOrgId,
             projectId: currentProjectId,
             customerName: finalCustName,
@@ -500,12 +486,10 @@ export function ProjectsAndInventoryPage() {
             email: finalCustEmail,
             source: 'MANUAL',
             isCustomer: true,
-            whatsappOptIn: true,
+            whatsappOptIn: false,
           });
-          finalLeadId = leadRes?.lead?.id;
-        } catch {
-          // If lead ingestion throws (e.g. slight phone format variation), proceed to generate quotation directly
-        }
+          finalLeadId = leadRes.lead.id;
+          setCostSheetLeadId(finalLeadId);
       }
 
       const res = await callBackendFunction<any, { quotation: Quotation; pdfBase64: string }>(
@@ -529,8 +513,8 @@ export function ProjectsAndInventoryPage() {
           validDays: 15,
           termsAndConditions:
             '1. Quotation valid for 15 days subject to availability. 2. Cheques/RTGS in favour of Builder Escrow Account. 3. Stamp duty & registration extra at actuals.',
-          selectedParkingSlotIds: [],
-          parkingSlotsCount: costSheetUnit.parkingEntitlementCount || 1,
+          selectedParkingSlotIds: parkingSlots.filter((slot) => slot.status === 'ALLOCATED' && slot.allocatedUnitId === costSheetUnit.id).map((slot) => slot.id),
+          parkingSlotsCount: costSheetUnit.parkingEntitlementCount,
           parkingTypeUsed: 'STANDARD',
         }
       );
@@ -637,52 +621,6 @@ export function ProjectsAndInventoryPage() {
     [units]
   );
 
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeOrgId || !activeOrganization) return;
-    setBusy(true);
-    setBannerMsg(null);
-    try {
-      const created = await callBackendFunction<any, Project>(
-        'createProject',
-        {
-          orgId: activeOrgId,
-          builderName: activeOrganization.name,
-          name: projName,
-          code: projCode,
-          city: projCity,
-          locality: projLocality,
-          address: projAddress,
-          projectType: projType,
-          reraNumber: projRera,
-          landAreaAcres: projLandAcres ? Number(projLandAcres) : undefined,
-          configurations: projConfigs
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean),
-          amenities: projAmenities
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean),
-          constructionStatus: projStatus,
-          possessionDate: projPossession || undefined,
-          isPublicPublished: projPublished,
-          listingIntent: 'BUY',
-        }
-      );
-      setProjects([created, ...projects.filter((p) => p.id !== created.id)]);
-      selectProject(created.id, 'SINGLE_PROJECT');
-      setCreateProjectOpen(false);
-      setProjName('');
-      setProjCode('');
-      setBannerMsg(`Created project "${created.name}".`);
-    } catch (err) {
-      setBannerMsg(err instanceof Error ? err.message : 'Failed to create project.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleCreatePhase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId || !currentProjectId) return;
@@ -755,66 +693,12 @@ export function ProjectsAndInventoryPage() {
     }
   };
 
-  const handleCreateUnit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeOrgId || !currentProjectId) return;
-    setBusy(true);
-    let uploadedPath: string | undefined;
-    try {
-      if (floorPlan) {
-        if (!['image/jpeg', 'image/png', 'image/webp'].includes(floorPlan.type) || floorPlan.size > 10 * 1024 * 1024) {
-          throw new Error('Choose a JPG, PNG or WebP floor plan smaller than 10 MB.');
-        }
-        uploadedPath = `organizations/${activeOrgId}/projects/${currentProjectId}/floorplans/${crypto.randomUUID()}`;
-        await uploadBytes(ref(storage, uploadedPath), floorPlan, { contentType: floorPlan.type });
-      }
-      const selectedTowerObj = towers.find((t) => t.id === unitTowerId);
-      if (
-        unitTypeVal !== 'PLOT' &&
-        unitTypeVal !== 'VILLA' &&
-        selectedTowerObj?.totalFloors &&
-        selectedTowerObj.totalFloors > 0 &&
-        Number(unitFloorNo) > selectedTowerObj.totalFloors
-      ) {
-        setBannerMsg(`Floor number (${unitFloorNo}) cannot exceed tower "${selectedTowerObj.name}" total floors (${selectedTowerObj.totalFloors}).`);
-        setBusy(false);
-        return;
-      }
-      const createdUnit = await callBackendFunction<any, Unit>('createUnit', {
-        orgId: activeOrgId,
-        projectId: currentProjectId,
-        towerId: unitTowerId || null,
-        towerName: selectedTowerObj?.name,
-        floorNumber: unitTypeVal === 'PLOT' || unitTypeVal === 'VILLA' ? 0 : Number(unitFloorNo),
-        series: unitSeries.trim().toUpperCase() || undefined,
-        unitNumber,
-        unitType: unitTypeVal,
-        bhk: unitBhk,
-        saleableAreaSqft: Number(unitSaleable),
-        carpetAreaSqft: Number(unitCarpet),
-        facing: unitFacing,
-        isCorner: unitCorner,
-        balconiesCount: 2,
-        parkingEntitlementCount: Number(unitParkingEntitled),
-        baseRatePerSqft: Number(unitBaseRate),
-        listingMode: 'BUY',
-        isPublicPublished: unitPublished,
-        ...(uploadedPath ? { floorPlanStoragePath: uploadedPath } : {}),
-      });
-      setUnits((prev) => [...prev.filter((u) => u.id !== createdUnit.id), createdUnit]);
-      setCreateUnitOpen(false);
-      setUnitNumber('');
-      setUnitSeries('01');
-      setFloorPlan(null);
-      setBannerMsg(`Added unit ${unitNumber.toUpperCase()} (Series ${createdUnit.series || 'N/A'}) to inventory.`);
-    } catch (err) {
-      setBannerMsg(err instanceof Error ? err.message : 'Failed to create unit.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleOpenEdit = (unit: Unit) => {
+    setEditRooms({ ...createUnitDraft(), bedrooms: unit.bedroomsCount === undefined ? '' : String(unit.bedroomsCount),
+      bathrooms: unit.bathroomsCount === undefined ? '' : String(unit.bathroomsCount), balconies: String(unit.balconiesCount),
+      furnishing: unit.furnishing ?? 'UNFURNISHED', amenities: unit.unitAmenities ?? [],
+      rooms: (unit.roomDetails ?? []).map((room) => ({ id: crypto.randomUUID(), name: room.name, type: room.type, length: room.lengthFt === undefined ? '' : String(room.lengthFt), width: room.widthFt === undefined ? '' : String(room.widthFt) })),
+    });
     setEditUnitId(unit.id);
     setEditUnitNumber(unit.unitNumber);
     setEditUnitSeries(unit.series ?? '');
@@ -851,6 +735,7 @@ export function ProjectsAndInventoryPage() {
       const updated = await callBackendFunction<any, Unit>('updateUnit', {
         orgId: activeOrgId,
         unitId: editUnitId,
+        ...roomPayload(editRooms),
         unitNumber: editUnitNumber,
         series: editUnitSeries.trim() || undefined,
         floorNumber: Number(editFloorNo),
@@ -942,6 +827,7 @@ export function ProjectsAndInventoryPage() {
           startUnitNumber: Number(bulkStartUnit),
           ...(floorPlanStoragePath ? { floorPlanStoragePath } : {}),
           bhk: bulkBhk,
+          ...roomPayload(bulkRooms),
           saleableAreaSqft: Number(bulkSaleable),
           carpetAreaSqft: Number(bulkCarpet),
           facing: bulkFacing,
@@ -1029,54 +915,47 @@ export function ProjectsAndInventoryPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Enterprise Inventory Engine"
-        title="Projects & Visual Inventory"
-        description="Manage multi-city projects, phases, towers, floors, apartments, villas, and plots with transactional reservation locks."
+        eyebrow="Project Workspace"
+        title="Projects & Inventory"
+        description="Organize your projects and units, review availability, and prepare customer cost sheets."
         actions={
           <>
             <PermissionGate permission="projects:create">
-              <Button variant="outline" size="sm" onClick={() => setCreateProjectOpen(true)}>
+              <Button variant="outline" size="sm" onClick={onStartProject}>
                 <FolderPlus className="h-4 w-4" />
                 New Project
               </Button>
             </PermissionGate>
             {currentProjectId && (
               <PermissionGate permission="projects:edit" projectId={currentProjectId}>
-                <Button variant="outline" size="sm" onClick={() => setCreatePhaseOpen(true)}>
-                  + Phase
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setCreateTowerOpen(true)}>
-                  <Layers className="h-4 w-4" />
-                  + Tower / Sector
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm"><Layers className="h-4 w-4" />Project Setup</Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onSelect={() => setCreatePhaseOpen(true)}>Add Phase</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setCreateTowerOpen(true)}>Add Tower / Sector</DropdownMenuItem>
+                    <PermissionGate permission="inventory:manage" projectId={currentProjectId}>
+                      <DropdownMenuItem onSelect={() => navigate('/app/ai-studio')}>AI Floor-Plan Studio</DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => setAiDrawerOpen(true, 'Add Tower 1')}>AI Tower Wizard</DropdownMenuItem>
+                    </PermissionGate>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </PermissionGate>
             )}
             {currentProjectId && (
               <PermissionGate permission="inventory:manage" projectId={currentProjectId}>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate('/app/ai-studio')}
-                >
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  AI Floor-Plan Studio
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setAiDrawerOpen(true, 'Add Tower 1')}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  AI Tower Wizard
-                </Button>
                 {towers.length > 0 && (
                   <Button variant="secondary" size="sm" onClick={() => setBulkWizardOpen(true)}>
-                    Bulk Generate Floor Units
+                    Bulk Add Units
                   </Button>
                 )}
-                <Button size="sm" onClick={() => setCreateUnitOpen(true)}>
+                <Button size="sm" onClick={() => {
+                  const project = projects.find((item) => item.id === currentProjectId);
+                  if (project) onStartUnit(project, towers);
+                }}>
                   <Plus className="h-4 w-4" />
-                  Add Unit / Plot
+                  Add Inventory
                 </Button>
                 <Button
                   variant="outline"
@@ -1085,7 +964,7 @@ export function ProjectsAndInventoryPage() {
                   onClick={() => setPriceLogModalOpen(true)}
                 >
                   <TrendingUp className="h-4 w-4 text-primary" />
-                  Price Log ({priceRevisions.length})
+                  Price History ({priceRevisions.length})
                 </Button>
               </PermissionGate>
             )}
@@ -1105,10 +984,20 @@ export function ProjectsAndInventoryPage() {
           title="No projects yet. Create your first project."
           description="Support apartment towers, plotted layouts, gated villas, commercial offices, and mixed-use developments with RERA tracking."
           actionLabel="Create First Project"
-          onAction={() => setCreateProjectOpen(true)}
+          onAction={onStartProject}
         />
       ) : (
         <>
+          {projects.find((project) => project.id === currentProjectId) && (
+            <ProjectDetailsSummary project={projects.find((project) => project.id === currentProjectId)!} actions={
+              <PermissionGate permission="projects:edit" projectId={currentProjectId}>
+                <Button type="button" size="sm" variant="outline" onClick={() => {
+                  const project = projects.find((item) => item.id === currentProjectId);
+                  if (project) onEditProject(project);
+                }}><Edit className="h-4 w-4" />Edit Project</Button>
+              </PermissionGate>
+            } />
+          )}
           {/* Project Switcher & Hierarchy Summary */}
           <Card>
             <CardContent className="p-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1116,7 +1005,10 @@ export function ProjectsAndInventoryPage() {
                 <div className="w-64">
                   <Select
                     value={currentProjectId ?? ''}
-                    onValueChange={(val) => selectProject(val)}
+                    onValueChange={(val) => {
+                      selectProject(val);
+                      if (routeProjectId) navigate(`/builder/projects/${val}`);
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select Project" />
@@ -1321,7 +1213,10 @@ export function ProjectsAndInventoryPage() {
               title="No units added. Import or create inventory."
               description="Add individual apartments, villas, or plots—or use the Bulk Tower Generator to populate an entire residential tower."
               actionLabel="Add First Unit / Plot"
-              onAction={() => setCreateUnitOpen(true)}
+              onAction={() => {
+                  const project = projects.find((item) => item.id === currentProjectId);
+                  if (project) onStartUnit(project, towers);
+                }}
             />
           ) : viewMode === 'visual' ? (
             <div className="space-y-3">
@@ -1546,6 +1441,7 @@ export function ProjectsAndInventoryPage() {
                 <div className="text-xs font-semibold text-foreground">
                   Inventory Workflow & Customer Allocation
                 </div>
+                <UnitRoomSummary unit={selectedUnit} />
                 {floorPlanUrl && (
                   <a className="block text-primary underline text-sm" href={floorPlanUrl} target="_blank" rel="noopener noreferrer">
                     View floor plan
@@ -1773,100 +1669,6 @@ export function ProjectsAndInventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Create Project Modal */}
-      <Dialog open={createProjectOpen} onOpenChange={setCreateProjectOpen}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Create Real Estate Project</DialogTitle>
-            <DialogDescription>
-              Configure RERA details, location, configurations, and hierarchy support for apartments, villas, or plotted developments.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleCreateProject} className="space-y-3.5">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label>Project Name *</Label>
-                <Input required value={projName} onChange={(e) => setProjName(e.target.value)} placeholder="Emerald Heights" />
-              </div>
-              <div className="space-y-1">
-                <Label>Project Code *</Label>
-                <Input required value={projCode} onChange={(e) => setProjCode(e.target.value)} placeholder="EMH-BLR" />
-              </div>
-              <div className="space-y-1">
-                <Label>City *</Label>
-                <Input required value={projCity} onChange={(e) => setProjCity(e.target.value)} placeholder="Bengaluru" />
-              </div>
-              <div className="space-y-1">
-                <Label>Locality / Micro-Market *</Label>
-                <Input required value={projLocality} onChange={(e) => setProjLocality(e.target.value)} placeholder="Whitefield" />
-              </div>
-              <div className="space-y-1">
-                <Label>Project Type *</Label>
-                <Select value={projType} onValueChange={(v: any) => setProjType(v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="APARTMENT">Residential Apartments</SelectItem>
-                    <SelectItem value="VILLA">Gated Villas</SelectItem>
-                    <SelectItem value="PLOTTED">Plotted Development</SelectItem>
-                    <SelectItem value="COMMERCIAL">Commercial Spaces</SelectItem>
-                    <SelectItem value="MIXED">Mixed Use</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label>RERA Registration Number *</Label>
-                <Input required value={projRera} onChange={(e) => setProjRera(e.target.value)} placeholder="PRM/KA/RERA/1251/..." />
-              </div>
-              <div className="space-y-1">
-                <Label>Construction Status</Label>
-                <Select value={projStatus} onValueChange={(v: any) => setProjStatus(v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="PRE_LAUNCH">Pre-Launch</SelectItem>
-                    <SelectItem value="NEW_LAUNCH">New Launch</SelectItem>
-                    <SelectItem value="UNDER_CONSTRUCTION">Under Construction</SelectItem>
-                    <SelectItem value="NEARING_POSSESSION">Nearing Possession</SelectItem>
-                    <SelectItem value="READY_TO_MOVE">Ready to Move</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label>Land Area (Acres) & Possession Date</Label>
-                <div className="grid grid-cols-2 gap-2">
-                  <Input type="number" step="0.01" placeholder="Acres" value={projLandAcres} onChange={(e) => setProjLandAcres(e.target.value)} />
-                  <Input type="date" value={projPossession} onChange={(e) => setProjPossession(e.target.value)} />
-                </div>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label>Site Address *</Label>
-              <Input required value={projAddress} onChange={(e) => setProjAddress(e.target.value)} placeholder="Full site address" />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label>Configurations (comma-separated)</Label>
-                <Input value={projConfigs} onChange={(e) => setProjConfigs(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label>Amenities (comma-separated)</Label>
-                <Input value={projAmenities} onChange={(e) => setProjAmenities(e.target.value)} />
-              </div>
-            </div>
-            <div className="flex items-center justify-between rounded-md border border-border p-3">
-              <div className="text-xs">
-                <div className="font-medium">Publish on Public Property Portal</div>
-                <div className="text-muted-foreground">Only published projects appear on public search & comparisons.</div>
-              </div>
-              <Switch checked={projPublished} onCheckedChange={setProjPublished} />
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setCreateProjectOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={busy}>{busy ? 'Creating...' : 'Create Project'}</Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
       {/* Create Phase Modal */}
       <Dialog open={createPhaseOpen} onOpenChange={setCreatePhaseOpen}>
         <DialogContent>
@@ -1936,134 +1738,6 @@ export function ProjectsAndInventoryPage() {
             </div>
             <DialogFooter>
               <Button type="submit" disabled={busy}>Save Tower / Sector</Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Create Single Unit / Plot Modal */}
-      <Dialog open={createUnitOpen} onOpenChange={setCreateUnitOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Add Unit / Villa / Plot</DialogTitle>
-            <DialogDescription>
-              Plotted developments and independent villas do not require artificial apartment floors.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleCreateUnit} className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label>Unit / Plot Number *</Label>
-                <Input required placeholder="e.g., 101, A-1204, VILLA-08 or PLOT-12" value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label>Flat / Unit Series *</Label>
-                <Input
-                  required
-                  placeholder="e.g., 01, 02, 1, 2, A"
-                  value={unitSeries}
-                  onChange={(e) => {
-                    const s = e.target.value.trim().toUpperCase();
-                    setUnitSeries(s);
-                    if (s && unitFloorNo && (!unitNumber || unitNumber.endsWith(s))) {
-                      const tCode = unitTowerId ? towers.find((t) => t.id === unitTowerId)?.code : '';
-                      const fl = unitFloorNo === '0' ? '' : unitFloorNo;
-                      setUnitNumber(tCode ? `${tCode}-${fl}${s}` : `${fl}${s}`);
-                    }
-                  }}
-                />
-                <p className="text-[10px] text-muted-foreground">Unique series per floor in this tower/project.</p>
-              </div>
-              <div className="space-y-1">
-                <Label>Unit Type *</Label>
-                <Select value={unitTypeVal} onValueChange={(v: any) => setUnitTypeVal(v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="APARTMENT">Apartment</SelectItem>
-                    <SelectItem value="PENTHOUSE">Penthouse</SelectItem>
-                    <SelectItem value="VILLA">Villa</SelectItem>
-                    <SelectItem value="PLOT">Plot</SelectItem>
-                    <SelectItem value="SHOP">Retail Shop</SelectItem>
-                    <SelectItem value="OFFICE">Office Suite</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {towers.length > 0 && (
-                <div className="space-y-1">
-                  <Label>Tower / Sector</Label>
-                  <Select value={unitTowerId || '__NONE__'} onValueChange={(v) => setUnitTowerId(v === '__NONE__' ? '' : v)}>
-                    <SelectTrigger><SelectValue placeholder="Optional" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__NONE__">Direct (No Tower)</SelectItem>
-                      {towers.map((t) => (
-                        <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              {unitTypeVal !== 'PLOT' && unitTypeVal !== 'VILLA' && (
-                <div className="space-y-1">
-                  <Label>Floor Number *</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={towers.find((t) => t.id === unitTowerId)?.totalFloors || 200}
-                    value={unitFloorNo}
-                    onChange={(e) => setUnitFloorNo(e.target.value)}
-                  />
-                  {towers.find((t) => t.id === unitTowerId)?.totalFloors ? (
-                    <p className="text-[10px] text-muted-foreground">
-                      Max floor: {towers.find((t) => t.id === unitTowerId)?.totalFloors}
-                    </p>
-                  ) : null}
-                </div>
-              )}
-              <div className="space-y-1">
-                <Label>Configuration / BHK *</Label>
-                <Input required value={unitBhk} onChange={(e) => setUnitBhk(e.target.value)} placeholder="3 BHK / 2400 Sqft Plot" />
-              </div>
-              <div className="space-y-1">
-                <Label>Facing *</Label>
-                <Select value={unitFacing} onValueChange={(v: any) => setUnitFacing(v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {FACING_OPTIONS.map((f) => (
-                      <SelectItem key={f} value={f}>{f}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label>Saleable Area (sq. ft.) *</Label>
-                <Input required type="number" value={unitSaleable} onChange={(e) => setUnitSaleable(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label>Carpet Area (sq. ft.) *</Label>
-                <Input required type="number" value={unitCarpet} onChange={(e) => setUnitCarpet(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label>Base Rate per sq. ft. (INR) *</Label>
-                <Input required type="number" value={unitBaseRate} onChange={(e) => setUnitBaseRate(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label>Parking Entitlement (Spaces)</Label>
-                <Input type="number" min={0} max={10} value={unitParkingEntitled} onChange={(e) => setUnitParkingEntitled(e.target.value)} />
-              </div>
-            </div>
-            <div className="flex items-center justify-between pt-1">
-              <label className="flex items-center gap-2 text-xs">
-                <Switch checked={unitCorner} onCheckedChange={setUnitCorner} />
-                Corner Unit
-              </label>
-              <label className="flex items-center gap-2 text-xs">
-                <Switch checked={unitPublished} onCheckedChange={setUnitPublished} />
-                Publish on Public Portal
-              </label>
-            </div>
-            <DialogFooter>
-              <div><Label>Floor plan image (optional, up to 10 MB)</Label><Input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setFloorPlan(e.target.files?.[0] ?? null)} /></div>
-              <Button type="submit" disabled={busy}>Create Unit</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -2205,6 +1879,10 @@ export function ProjectsAndInventoryPage() {
               </label>
             </div>
 
+            <details className="rounded-lg border border-border p-3">
+              <summary className="cursor-pointer text-sm font-medium">Room details & unit amenities (applies to this batch)</summary>
+              <div className="pt-4"><UnitRoomFields draft={{ ...bulkRooms, type: bulkUnitType }} onChange={setBulkRooms} /></div>
+            </details>
             <div className="space-y-1">
               <Label>Floor plan image (optional)</Label>
               <Input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setBulkFloorPlan(e.target.files?.[0] ?? null)} />
@@ -2344,6 +2022,7 @@ export function ProjectsAndInventoryPage() {
                 Publish on Public Portal
               </label>
             </div>
+            <UnitRoomFields draft={{ ...editRooms, type: editUnitTypeVal }} onChange={setEditRooms} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setEditUnitOpen(false)}>
                 Cancel
@@ -2513,7 +2192,7 @@ export function ProjectsAndInventoryPage() {
                     <SelectValue placeholder="Select price book" />
                   </SelectTrigger>
                   <SelectContent>
-                    {priceBooks.map((pb) => (
+                    {quotationPriceBooks.map((pb) => (
                       <SelectItem key={pb.id} value={pb.id}>
                         {pb.name} (v{pb.versionNumber}) — {formatInr(pb.basePricePerSqft)}/sq.ft. {pb.status === 'ACTIVE' ? '• Active' : ''}
                       </SelectItem>
@@ -2631,7 +2310,7 @@ export function ProjectsAndInventoryPage() {
               </Button>
               <Button
                 type="submit"
-                disabled={costSheetGenerating}
+                disabled={costSheetGenerating || !costSheetCustName.trim() || !costSheetCustPhone.trim()}
                 className="gap-2 bg-primary text-primary-foreground font-semibold"
               >
                 <Download className="h-4 w-4" />
