@@ -1122,6 +1122,28 @@ export interface ReconciliationRecord {
   reconciledAt: ISODateString;
 }
 
+export interface PaymentReminderRecord {
+  id: string;
+  orgId: string;
+  projectId: string;
+  bookingId: string;
+  collectionRecordId?: string | null;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  unitNumber: string;
+  channel: 'WHATSAPP' | 'EMAIL' | 'SMS';
+  amountDueInr: number;
+  milestoneName: string;
+  dueDate: string;
+  isOverdue: boolean;
+  message: string;
+  sentByUid: string;
+  sentAt: string;
+  status: 'SENT' | 'DELIVERED' | 'FAILED';
+  createdAt: string;
+}
+
 // 28. documents
 export type DocumentCategory =
   | 'MASTER_PLAN'

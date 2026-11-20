@@ -389,3 +389,181 @@ export const razorpayCollectionsWebhook = onRequest(async (req, res) => {
 
   res.status(200).json({ ok: true });
 });
+
+export async function sendPaymentReminderService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  params: {
+    orgId: string;
+    bookingId: string;
+    collectionRecordId?: string;
+    channel?: 'WHATSAPP' | 'EMAIL' | 'SMS';
+    customMessage?: string;
+  }
+) {
+  const bkRef = db.collection('bookings').doc(params.bookingId);
+  const bkSnap = await bkRef.get();
+  if (!bkSnap.exists || bkSnap.data()?.orgId !== params.orgId) {
+    throw new HttpsError('not-found', 'Booking not found.');
+  }
+  const bk = bkSnap.data() as Booking;
+
+  let col: CollectionRecord | undefined;
+  if (params.collectionRecordId) {
+    const colSnap = await db.collection('collection_records').doc(params.collectionRecordId).get();
+    if (colSnap.exists && colSnap.data()?.orgId === params.orgId) {
+      col = colSnap.data() as CollectionRecord;
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+  const reminderDoc = db.collection('payment_reminders').doc();
+  const milestoneName = col?.milestoneName || 'Pending Installment';
+  const amountDue = col
+    ? (col.demandAmountInr > col.paidAmountInr ? col.demandAmountInr - col.paidAmountInr : col.demandAmountInr)
+    : bk.outstandingBalanceInr;
+  const dueDate = col?.dueDate || bk.bookedAt || nowIso;
+  const isOverdue = new Date(dueDate).getTime() < Date.now();
+
+  const formattedAmount = `₹${amountDue.toLocaleString('en-IN')}`;
+  const message = params.customMessage ||
+    `Dear ${bk.customer.fullName}, this is a reminder regarding your booking for Unit ${bk.unitNumber}. ${isOverdue ? 'OVERDUE: ' : ''}Amount due is ${formattedAmount} for ${milestoneName} (Due date: ${new Date(dueDate).toLocaleDateString('en-IN')}). Please complete the payment. Thank you!`;
+
+  const reminderRecord = {
+    id: reminderDoc.id,
+    orgId: params.orgId,
+    projectId: bk.projectId,
+    bookingId: bk.id,
+    collectionRecordId: col?.id ?? null,
+    customerName: bk.customer.fullName,
+    customerPhone: bk.customer.phone,
+    customerEmail: bk.customer.email,
+    unitNumber: bk.unitNumber,
+    channel: params.channel || 'WHATSAPP',
+    amountDueInr: amountDue,
+    milestoneName,
+    dueDate,
+    isOverdue,
+    message,
+    sentByUid: actor.uid,
+    sentAt: nowIso,
+    status: 'SENT',
+    createdAt: nowIso,
+  };
+
+  await reminderDoc.set(reminderRecord);
+
+  if (col) {
+    await db.collection('collection_records').doc(col.id).update({
+      lastReminderSentAt: nowIso,
+      reminderCount: ((col as any).reminderCount ?? 0) + 1,
+      updatedAt: nowIso,
+    });
+  }
+
+  await writeAuditEvent(db, {
+    orgId: params.orgId,
+    actorUid: actor.uid,
+    action: 'PAYMENT_REMINDER_SENT',
+    category: 'SYSTEM',
+    entityType: 'booking',
+    entityId: bk.id,
+    summary: `Sent payment reminder to ${bk.customer.fullName} for Unit ${bk.unitNumber} (${milestoneName}, ${formattedAmount}).`,
+  });
+
+  return reminderRecord;
+}
+
+export async function sendBatchPaymentRemindersService(
+  db: Firestore,
+  actor: AuthenticatedActor,
+  params: {
+    orgId: string;
+    projectId?: string;
+    filterType: 'OVERDUE' | 'DUE_SOON' | 'ALL_PENDING';
+  }
+) {
+  let bkQuery = db.collection('bookings').where('orgId', '==', params.orgId);
+  if (params.projectId) {
+    bkQuery = bkQuery.where('projectId', '==', params.projectId);
+  }
+  const bkSnap = await bkQuery.get();
+  const bookings = bkSnap.docs
+    .map((d) => d.data() as Booking)
+    .filter((b) => b.status !== 'CANCELLED' && b.outstandingBalanceInr > 0);
+
+  let colQuery = db.collection('collection_records').where('orgId', '==', params.orgId);
+  if (params.projectId) {
+    colQuery = colQuery.where('projectId', '==', params.projectId);
+  }
+  const colSnap = await colQuery.get();
+  const collections = colSnap.docs.map((d) => d.data() as CollectionRecord);
+
+  const now = Date.now();
+  const sentReminders: any[] = [];
+
+  for (const bk of bookings) {
+    const demands = collections.filter(
+      (c) => c.bookingId === bk.id && (c.status === 'DUE' || c.recordType === 'MILESTONE_DEMAND') && c.demandAmountInr > c.paidAmountInr
+    );
+
+    if (demands.length > 0) {
+      for (const col of demands) {
+        const dueTime = col.dueDate ? new Date(col.dueDate).getTime() : 0;
+        const isOverdue = dueTime > 0 && dueTime < now;
+        const isDueSoon = dueTime > 0 && dueTime >= now && dueTime <= now + 7 * 86400000;
+
+        let shouldSend = false;
+        if (params.filterType === 'OVERDUE' && isOverdue) shouldSend = true;
+        if (params.filterType === 'DUE_SOON' && isDueSoon) shouldSend = true;
+        if (params.filterType === 'ALL_PENDING' && (isOverdue || isDueSoon)) shouldSend = true;
+
+        if (shouldSend) {
+          const rem = await sendPaymentReminderService(db, actor, {
+            orgId: params.orgId,
+            bookingId: bk.id,
+            collectionRecordId: col.id,
+            channel: 'WHATSAPP',
+          });
+          sentReminders.push(rem);
+        }
+      }
+    } else if (params.filterType === 'ALL_PENDING' || params.filterType === 'DUE_SOON') {
+      const rem = await sendPaymentReminderService(db, actor, {
+        orgId: params.orgId,
+        bookingId: bk.id,
+        channel: 'WHATSAPP',
+      });
+      sentReminders.push(rem);
+    }
+  }
+
+  return {
+    sentCount: sentReminders.length,
+    reminders: sentReminders,
+  };
+}
+
+export const sendPaymentReminder = onCall(async (request) => {
+  const schema = z.object({
+    orgId: z.string().min(1),
+    bookingId: z.string().min(1),
+    collectionRecordId: z.string().optional(),
+    channel: z.enum(['WHATSAPP', 'EMAIL', 'SMS']).default('WHATSAPP'),
+    customMessage: z.string().optional(),
+  });
+  const input = schema.parse(request.data);
+  const { actor } = await requireOrgPermission(request, input.orgId, 'collections:record');
+  return sendPaymentReminderService(adminDb, actor, input);
+});
+
+export const sendBatchPaymentReminders = onCall(async (request) => {
+  const schema = z.object({
+    orgId: z.string().min(1),
+    projectId: z.string().optional(),
+    filterType: z.enum(['OVERDUE', 'DUE_SOON', 'ALL_PENDING']),
+  });
+  const input = schema.parse(request.data);
+  const { actor } = await requireOrgPermission(request, input.orgId, 'collections:record');
+  return sendBatchPaymentRemindersService(adminDb, actor, input);
+});

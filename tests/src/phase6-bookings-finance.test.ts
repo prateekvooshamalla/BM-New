@@ -23,6 +23,8 @@ import {
   confirmVerifiedRazorpayCollectionService,
   reconcileCollectionSettlementService,
   recordCollectionEntryService,
+  sendBatchPaymentRemindersService,
+  sendPaymentReminderService,
 } from '../../functions/src/collections';
 import { createTransactionalTestFirestore } from './helpers/in-memory-firestore';
 
@@ -277,5 +279,198 @@ describe('Phase 6 — Controlled Bookings, Collections, Razorpay HMAC Verificati
     const unitAfterCancel = await db.collection('units').doc(unit.id).get();
     expect(unitAfterCancel.data()?.status).toBe('AVAILABLE');
     expect(unitAfterCancel.data()?.activeBookingId).toBeNull();
+  });
+
+  it('automates payment reminders for overdue milestones and upcoming due activities', async () => {
+    const db = createTransactionalTestFirestore();
+    const { organization } = await createOrganizationService(db, FINANCE_ADMIN, {
+      name: 'Skyline Ventures',
+      legalName: 'Skyline Ventures LLP',
+      headquartersCity: 'Bengaluru',
+    });
+
+    const project = await createProjectService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      builderName: 'Skyline Ventures',
+      name: 'Skyline Heights',
+      code: 'SKH',
+      city: 'Bengaluru',
+      locality: 'Whitefield',
+      address: 'Whitefield Main Road',
+      projectType: 'APARTMENT',
+      reraNumber: 'PRM/KA/RERA/SKH/2026',
+      configurations: ['2 BHK'],
+      constructionStatus: 'UNDER_CONSTRUCTION',
+    });
+
+    const unit = await createUnitService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      projectId: project.id,
+      floorNumber: 5,
+      unitNumber: 'A-501',
+      unitType: 'APARTMENT',
+      bhk: '2 BHK',
+      saleableAreaSqft: 1200,
+      carpetAreaSqft: 850,
+      facing: 'NORTH',
+      parkingEntitlementCount: 1,
+      baseRatePerSqft: 8000,
+    });
+
+    const pb = await savePriceBookDraftService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      projectId: project.id,
+      name: 'Base Price Book',
+      effectiveFrom: '2026-11-16T00:00:00.000Z',
+      basePricePerSqft: 8000,
+      floorRise: { enabled: false, startFloor: 1, ratePerFloorPerSqft: 0 },
+      facingPremiumPerSqft: {},
+      viewPremiumPerSqft: {},
+      cornerPremiumPerSqft: 0,
+      locationPremiumPerSqft: 0,
+      unitSpecificPremiumInr: {},
+      parkingPricesByType: {
+        STANDARD: 300000,
+        TANDEM: 500000,
+        MECHANICAL: 200000,
+        EV: 400000,
+        ACCESSIBLE: 300000,
+      },
+      lineItems: DEFAULT_LINE_ITEMS_TEMPLATE,
+      taxConfig: {
+        agreementGstPct: 5,
+        otherServiceGstPct: 18,
+        roundingMode: 'NEAREST_RUPEE',
+        registrationDisclaimer: 'Registration extra.',
+      },
+      maxDiscountPctWithoutApproval: 2,
+    });
+
+    await submitPriceBookForApprovalService(db, FINANCE_ADMIN, 'Finance Head', {
+      orgId: organization.id,
+      priceBookId: pb.id,
+    });
+    const appSnap = await db.collection('approvals').where('entityId', '==', pb.id).get();
+    await decideApprovalService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      approvalId: appSnap.docs[0]!.id,
+      decision: 'APPROVED',
+      decisionNotes: 'Approved',
+    });
+    await activatePriceBookService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      priceBookId: pb.id,
+      reason: 'Active',
+    });
+
+    const plan = await createPaymentPlanService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      projectId: project.id,
+      name: 'Standard CLP',
+      planType: 'CONSTRUCTION_LINKED',
+      milestones: [
+        { sequence: 1, name: 'Booking Token', percentage: 20, dueTrigger: 'On Booking', taxTreatment: 'PROPORTIONAL_GST' },
+        { sequence: 2, name: 'Foundation Slab', percentage: 80, dueTrigger: 'On Foundation', taxTreatment: 'PROPORTIONAL_GST' },
+      ],
+    });
+
+    const { lead } = await ingestLeadService(db, FINANCE_ADMIN, 'BUILDER_ADMIN', {
+      orgId: organization.id,
+      customerName: 'Ananya Sharma',
+      phone: '+919876543210',
+      email: 'ananya@example.com',
+      source: 'MANUAL',
+      preferredProjectIds: [project.id],
+    });
+
+    const { quotation } = await createQuotationService(
+      db,
+      FINANCE_ADMIN,
+      'Finance Head',
+      'BUILDER_ADMIN',
+      {
+        orgId: organization.id,
+        projectId: project.id,
+        unitId: unit.id,
+        priceBookId: pb.id,
+        paymentPlanId: plan.id,
+        leadId: lead.id,
+        customer: { name: 'Ananya Sharma', phone: '+919876543210', email: 'ananya@example.com' },
+        parkingSlotsCount: 1,
+        parkingTypeUsed: 'STANDARD',
+        discount: { type: 'NONE', value: 0 },
+        validDays: 15,
+        termsAndConditions: 'Standard terms.',
+      }
+    );
+
+    const booking = await createBookingService(
+      db,
+      FINANCE_ADMIN,
+      'Finance Head',
+      'BUILDER_ADMIN',
+      {
+        orgId: organization.id,
+        projectId: project.id,
+        unitId: unit.id,
+        quotationId: quotation.id,
+        leadId: lead.id,
+        customer: {
+          fullName: 'Ananya Sharma',
+          phone: '+919876543210',
+          email: 'ananya@example.com',
+          panNumber: 'ABCDE5678G',
+          permanentAddress: 'Koramangala, Bengaluru',
+        },
+        allocatedParkingSlotIds: [],
+        tokenAmountExpectedInr: 500000,
+      },
+      true
+    );
+
+    // Create an overdue milestone demand (due 10 days ago)
+    const tenDaysAgo = new Date(Date.now() - 10 * 86400 * 1000).toISOString();
+    const overdueCol = await recordCollectionEntryService(db, FINANCE_ADMIN, 'FINANCE_MANAGER', {
+      orgId: organization.id,
+      bookingId: booking.id,
+      recordType: 'MILESTONE_DEMAND',
+      milestoneName: 'Foundation Slab',
+      demandAmountInr: 1500000,
+      paidAmountInr: 0,
+      paymentMode: 'NEFT',
+      dueDate: tenDaysAgo,
+    });
+
+    // 1. Send single reminder via WhatsApp
+    const singleReminder = await sendPaymentReminderService(db, FINANCE_ADMIN, {
+      orgId: organization.id,
+      bookingId: booking.id,
+      collectionRecordId: overdueCol.id,
+      channel: 'WHATSAPP',
+    });
+
+    expect(singleReminder.customerName).toBe('Ananya Sharma');
+    expect(singleReminder.amountDueInr).toBe(1500000);
+    expect(singleReminder.isOverdue).toBe(true);
+    expect(singleReminder.channel).toBe('WHATSAPP');
+    expect(singleReminder.status).toBe('SENT');
+
+    // Verify collection record updated with reminder count
+    const updatedColSnap = await db.collection('collection_records').doc(overdueCol.id).get();
+    expect(updatedColSnap.data()?.reminderCount).toBe(1);
+    expect(updatedColSnap.data()?.lastReminderSentAt).toBeDefined();
+
+    // Verify reminder was stored in payment_reminders
+    const remSnap = await db.collection('payment_reminders').doc(singleReminder.id).get();
+    expect(remSnap.exists).toBe(true);
+
+    // 2. Batch dispatch for overdue demands
+    const batchResult = await sendBatchPaymentRemindersService(db, FINANCE_ADMIN, {
+      orgId: organization.id,
+      filterType: 'OVERDUE',
+    });
+
+    expect(batchResult.sentCount).toBeGreaterThanOrEqual(1);
+    expect(batchResult.reminders[0]?.isOverdue).toBe(true);
   });
 });
