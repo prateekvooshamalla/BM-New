@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  UserCheck,
   Users,
   Wallet,
   X,
@@ -190,23 +191,46 @@ export function EnterpriseLayout() {
             {items.map((item) => {
               const Icon = NAV_ICONS[item.id] ?? FolderKanban;
               return (
-                <NavLink
-                  key={item.id}
-                  to={item.path}
-                  onClick={() => setMobileMenuOpen(false)}
-                  className={({ isActive }) =>
-                    `bm-nav-item ${isActive ? 'bg-sidebar-active text-sidebar-active-foreground font-semibold' : ''}`
-                  }
-                >
-                  {({ isActive }) => (
-                    <>
-                      <Icon
-                        className={`h-4 w-4 shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
-                      />
-                      <span>{item.label}</span>
-                    </>
+                <React.Fragment key={item.id}>
+                  <NavLink
+                    to={item.path}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={({ isActive }) =>
+                      `bm-nav-item ${isActive ? 'bg-sidebar-active text-sidebar-active-foreground font-semibold' : ''}`
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <Icon
+                          className={`h-4 w-4 shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`}
+                        />
+                        <span>{item.label}</span>
+                      </>
+                    )}
+                  </NavLink>
+                  {item.id === 'leads-crm' && (
+                    <NavLink
+                      to="/builder/customers"
+                      onClick={() => setMobileMenuOpen(false)}
+                      className={({ isActive }) =>
+                        `bm-nav-item ml-3 text-xs border-l-2 border-emerald-500/40 pl-2.5 py-1.5 ${
+                          isActive
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-semibold'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`
+                      }
+                    >
+                      {({ isActive }) => (
+                        <>
+                          <UserCheck
+                            className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}
+                          />
+                          <span>Customers (Flat Buyers)</span>
+                        </>
+                      )}
+                    </NavLink>
                   )}
-                </NavLink>
+                </React.Fragment>
               );
             })}
           </div>

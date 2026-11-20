@@ -188,6 +188,7 @@ export function AppRouter() {
             <Route path="cost-sheets" element={<PricingAndCostSheetsPage />} />
             <Route path="quotations" element={<PricingAndCostSheetsPage />} />
             <Route path="leads" element={<LeadsCrmPage />} />
+            <Route path="customers" element={<LeadsCrmPage defaultTab="customers" />} />
             <Route path="forms" element={<FormBuilderPage />} />
             <Route path="inbox" element={<WhatsAppInboxPage />} />
             <Route path="channel-partners" element={<ChannelPartnersPage />} />
@@ -221,6 +222,7 @@ export function AppRouter() {
             <Route path="pricing" element={<PricingAndCostSheetsPage />} />
             <Route path="quotations" element={<PricingAndCostSheetsPage />} />
             <Route path="leads" element={<LeadsCrmPage />} />
+            <Route path="customers" element={<LeadsCrmPage defaultTab="customers" />} />
             <Route path="forms" element={<FormBuilderPage />} />
             <Route path="inbox" element={<WhatsAppInboxPage />} />
             <Route path="channel-partners" element={<ChannelPartnersPage />} />
