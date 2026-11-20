@@ -785,6 +785,7 @@ export const convertLeadToCustomerSchema = z.object({
   orgId: z.string().min(1),
   leadId: z.string().min(1),
   unitId: z.string().optional(),
+  flatNumber: z.string().max(80).optional(),
   notes: z.string().max(1000).optional(),
 });
 

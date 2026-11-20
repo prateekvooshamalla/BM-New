@@ -6,11 +6,14 @@ import {
   computeDeterministicLeadScore,
   normalizeEmail,
   normalizeGlobalPhone,
+  type Booking,
+  type CollectionRecord,
   type Lead,
   type LeadActivity,
   type LeadStage,
   type Organization,
   type Project,
+  type Unit,
 } from '@bharat-makaan/shared';
 import {
   createLeadSchema,
@@ -248,6 +251,7 @@ export async function convertLeadToCustomerService(
     orgId: string;
     leadId: string;
     unitId?: string;
+    flatNumber?: string;
     notes?: string;
   }
 ): Promise<Lead> {
@@ -260,23 +264,142 @@ export async function convertLeadToCustomerService(
   const prev = snap.data() as Lead;
   const nowIso = new Date().toISOString();
 
-  let unitNumberNotice = '';
+  let targetUnit: Unit | null = null;
   if (params.unitId) {
     const uSnap = await db.collection('units').doc(params.unitId).get();
     if (uSnap.exists && uSnap.data()?.orgId === params.orgId) {
-      unitNumberNotice = ` for Flat ${uSnap.data()?.unitNumber}`;
+      targetUnit = uSnap.data() as Unit;
+    }
+  } else {
+    // Check if a unit is already held for this lead
+    const heldSnap = await db
+      .collection('units')
+      .where('orgId', '==', params.orgId)
+      .where('heldForLeadId', '==', prev.id)
+      .limit(1)
+      .get();
+    if (!heldSnap.empty) {
+      targetUnit = heldSnap.docs[0]!.data() as Unit;
+    } else if (params.flatNumber || params.notes) {
+      const match = (params.flatNumber || params.notes)?.match(/(?:Flat|Unit)\s*([A-Za-z0-9\-]+)/i);
+      const flatNum = params.flatNumber || match?.[1];
+      if (flatNum) {
+        const numSnap = await db
+          .collection('units')
+          .where('orgId', '==', params.orgId)
+          .where('unitNumber', '==', flatNum.trim())
+          .limit(1)
+          .get();
+        if (!numSnap.empty) {
+          targetUnit = numSnap.docs[0]!.data() as Unit;
+        }
+      }
     }
   }
+
+  const unitNumberNotice = targetUnit ? ` for Flat ${targetUnit.unitNumber}` : '';
 
   const updated: Lead = {
     ...prev,
     isCustomer: true,
+    stage: 'BOOKED',
     customerConvertedAt: prev.customerConvertedAt || nowIso,
     convertedByUid: actor.uid,
     updatedAt: nowIso,
   };
 
   await ref.set(updated);
+
+  // Check if booking already exists for this lead
+  const bkSnap = await db
+    .collection('bookings')
+    .where('orgId', '==', params.orgId)
+    .where('leadId', '==', prev.id)
+    .get();
+
+  if (bkSnap.empty) {
+    const bkRef = db.collection('bookings').doc();
+    const projId =
+      targetUnit?.projectId ||
+      prev.projectId ||
+      prev.preferredProjectIds?.[0] ||
+      'default-project';
+    const projSnap = await db.collection('projects').doc(projId).get();
+    const proj = projSnap.exists ? (projSnap.data() as Project) : null;
+    const projCode = proj?.code || 'PRJ';
+    const bookingNumber = `BM-BK-${projCode}-${new Date().getFullYear()}-${bkRef.id.slice(0, 5).toUpperCase()}`;
+    const contractVal = targetUnit?.calculatedTotalPrice || 5000000;
+    const tokenVal = 500000;
+    const unitNum = targetUnit?.unitNumber || params.flatNumber || 'Flat 101';
+
+    const bk: Booking = {
+      id: bkRef.id,
+      orgId: params.orgId,
+      bookingNumber,
+      projectId: projId,
+      towerId: targetUnit?.towerId ?? null,
+      unitId: targetUnit?.id ?? `unit-${bkRef.id}`,
+      unitNumber: unitNum,
+      quotationId: 'DIRECT_CUSTOMER_CONVERSION' as any,
+      leadId: prev.id,
+      partnerOrgId: null,
+      customer: {
+        fullName: prev.customerName,
+        phone: prev.normalizedPhone || prev.phone,
+        email:
+          prev.email ||
+          `${prev.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+        permanentAddress: prev.address || 'Address on file',
+      },
+      allocatedParkingSlotIds: targetUnit?.assignedParkingSlotIds || [],
+      agreementValueInr: contractVal,
+      totalPayableInr: contractVal,
+      tokenAmountExpectedInr: tokenVal,
+      totalCollectedVerifiedInr: 0,
+      outstandingBalanceInr: contractVal,
+      status: 'BOOKED',
+      requestedByUid: actor.uid,
+      approvedByUid: actor.uid,
+      bookedAt: nowIso,
+      cancelledAt: null,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    await bkRef.set(bk);
+
+    // Initial token demand
+    const colRef = db.collection('collection_records').doc();
+    const col: CollectionRecord = {
+      id: colRef.id,
+      orgId: params.orgId,
+      bookingId: bk.id,
+      projectId: projId,
+      unitId: bk.unitId,
+      recordType: 'TOKEN',
+      milestoneSequence: 1,
+      milestoneName: 'Booking Token Demand',
+      demandAmountInr: tokenVal,
+      paidAmountInr: 0,
+      allocatedAmountInr: 0,
+      paymentMode: 'NEFT',
+      razorpaySignatureVerified: false,
+      status: 'DUE',
+      dueDate: nowIso,
+      recordedByUid: actor.uid,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    await colRef.set(col);
+
+    if (targetUnit) {
+      await db.collection('units').doc(targetUnit.id).update({
+        status: 'BOOKED',
+        heldForLeadId: prev.id,
+        activeBookingId: bk.id,
+        updatedAt: nowIso,
+      });
+    }
+  }
 
   const actRef = db.collection('lead_activities').doc();
   await actRef.set({
@@ -300,7 +423,7 @@ export async function convertLeadToCustomerService(
     category: 'SYSTEM',
     entityType: 'lead',
     entityId: updated.id,
-    summary: `Prospect ${updated.customerName} converted to Customer.`,
+    summary: `Prospect ${updated.customerName} converted to Customer${unitNumberNotice}.`,
   });
 
   return updated;

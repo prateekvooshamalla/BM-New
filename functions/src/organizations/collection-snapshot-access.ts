@@ -27,6 +27,7 @@ export const WORKSPACE_COLLECTION_ACCESS = {
   site_visits: { permissions: ['visits:view'], projectScoped: true },
   bookings: { permissions: ['bookings:view'], projectScoped: true },
   collection_records: { permissions: ['collections:view'], projectScoped: true },
+  payment_reminders: { permissions: ['collections:view'], projectScoped: true },
   reconciliation_records: { permissions: ['collections:reconcile'] },
   documents: { permissions: ['documents:view'] },
   floor_plan_versions: { permissions: ['documents:view'], projectScoped: true },

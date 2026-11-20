@@ -7,6 +7,7 @@ import {
   Building2,
   Calculator,
   Check,
+  CheckCircle2,
   Download,
   Edit,
   Filter,
@@ -851,17 +852,17 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
   const handleUnitTransition = async (
     unit: Unit,
     targetStatus: UnitStatus,
-    action: 'HOLD' | 'RESERVE' | 'RELEASE' | 'CANCEL'
+    action: 'HOLD' | 'RESERVE' | 'RELEASE' | 'CANCEL' | 'BOOK'
   ) => {
     if (!activeOrgId) return;
     setDrawerNotice(null);
-    if ((action === 'HOLD' || action === 'RESERVE') && !holdCustomer && !unit.heldForLeadId) {
-      const msg = 'Please select or add a customer lead before holding or reserving this flat.';
+    if ((action === 'HOLD' || action === 'RESERVE' || action === 'BOOK') && !holdCustomer && !unit.heldForLeadId) {
+      const msg = 'Please select or add a customer lead before holding, reserving, or booking this flat.';
       setBannerMsg(msg);
       setDrawerNotice(msg);
       return;
     }
-    if ((action === 'HOLD' || action === 'RESERVE') && Number(holdAdvance) > 0 && !holdReference.trim()) {
+    if ((action === 'HOLD' || action === 'RESERVE' || action === 'BOOK') && Number(holdAdvance) > 0 && !holdReference.trim()) {
       const msg = 'Please enter a receipt or payment reference for the advance amount.';
       setBannerMsg(msg);
       setDrawerNotice(msg);
@@ -1620,6 +1621,24 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                         onClick={() => handleUnitTransition(selectedUnit, 'RESERVED', 'RESERVE')}
                       >
                         Reserve Unit
+                      </Button>
+                    </PermissionGate>
+                  )}
+
+                  {selectedUnit.status !== 'BOOKED' && selectedUnit.status !== 'AGREEMENT' && selectedUnit.status !== 'REGISTERED' && (
+                    <PermissionGate
+                      permission="bookings:create"
+                      projectId={selectedUnit.projectId}
+                    >
+                      <Button
+                        variant="default"
+                        size="sm"
+                        disabled={busy}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                        onClick={() => handleUnitTransition(selectedUnit, 'BOOKED', 'BOOK')}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                        Book Flat
                       </Button>
                     </PermissionGate>
                   )}

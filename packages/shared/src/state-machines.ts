@@ -45,6 +45,13 @@ export const UNIT_TRANSITION_RULES: UnitTransitionRule[] = [
     requiresReason: false,
   },
   {
+    from: 'AVAILABLE',
+    to: 'BOOKED',
+    action: 'BOOK',
+    requiredPermission: 'bookings:create',
+    requiresReason: false,
+  },
+  {
     from: 'ON_HOLD',
     to: 'RESERVED',
     action: 'RESERVE',
@@ -55,14 +62,14 @@ export const UNIT_TRANSITION_RULES: UnitTransitionRule[] = [
     from: 'ON_HOLD',
     to: 'BOOKED',
     action: 'BOOK',
-    requiredPermission: 'bookings:approve',
+    requiredPermission: 'bookings:create',
     requiresReason: false,
   },
   {
     from: 'RESERVED',
     to: 'BOOKED',
     action: 'BOOK',
-    requiredPermission: 'bookings:approve',
+    requiredPermission: 'bookings:create',
     requiresReason: false,
   },
   {

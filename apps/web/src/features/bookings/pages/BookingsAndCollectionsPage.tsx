@@ -32,6 +32,7 @@ import {
   formatInr,
   formatInrCompact,
   type Booking,
+  type BookingStatus,
   type CollectionRecord,
   type DocumentRecord,
   type Lead,
@@ -39,8 +40,10 @@ import {
   type Project,
   type Quotation,
   type ReconciliationRecord,
+  type Unit,
 } from '@bharat-makaan/shared';
-import { callBackendFunction } from '@/lib/firebase';
+import { callBackendFunction, db } from '@/lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { sortDescByIso, subscribeTenantCollection } from '@/lib/firestore-sync';
 import { useTenantStore } from '@/state/useTenantStore';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -130,7 +133,9 @@ export function BookingsAndCollectionsPage({
   const currentProjectId = activeProjectId ?? projects[0]?.id ?? null;
   const currentOrg = organizations.find((o) => o.id === activeOrgId);
 
+  const [selectedProject, setSelectedProject] = React.useState<string>('ALL');
   const [bookings, setBookings] = React.useState<Booking[]>([]);
+  const [units, setUnits] = React.useState<Unit[]>([]);
   const [collections, setCollections] = React.useState<CollectionRecord[]>([]);
   const [reconciliations, setReconciliations] = React.useState<ReconciliationRecord[]>([]);
   const [quotations, setQuotations] = React.useState<Quotation[]>([]);
@@ -174,22 +179,26 @@ export function BookingsAndCollectionsPage({
   const [settledAmt, setSettledAmt] = React.useState('');
   const [gatewayFee, setGatewayFee] = React.useState('0');
 
-  // Subscriptions
+  // Subscriptions - organization-wide to prevent missing cross-project bookings
   React.useEffect(() => {
     if (!activeOrgId) return;
 
     const uBk = subscribeTenantCollection<Booking>({
       orgId: activeOrgId,
       collectionName: 'bookings',
-      projectId: currentProjectId ?? undefined,
       sort: sortDescByIso<Booking>('createdAt'),
       onData: setBookings,
+    });
+
+    const uUnits = subscribeTenantCollection<Unit>({
+      orgId: activeOrgId,
+      collectionName: 'units',
+      onData: setUnits,
     });
 
     const uCol = subscribeTenantCollection<CollectionRecord>({
       orgId: activeOrgId,
       collectionName: 'collection_records',
-      projectId: currentProjectId ?? undefined,
       sort: sortDescByIso<CollectionRecord>('createdAt'),
       onData: setCollections,
     });
@@ -203,7 +212,6 @@ export function BookingsAndCollectionsPage({
     const uQt = subscribeTenantCollection<Quotation>({
       orgId: activeOrgId,
       collectionName: 'quotations',
-      projectId: currentProjectId ?? undefined,
       filter: (q) => q.status === 'ISSUED' || q.status === 'SHARED',
       onData: setQuotations,
     });
@@ -217,7 +225,6 @@ export function BookingsAndCollectionsPage({
     const uDoc = subscribeTenantCollection<DocumentRecord>({
       orgId: activeOrgId,
       collectionName: 'documents',
-      projectId: currentProjectId ?? undefined,
       sort: sortDescByIso<DocumentRecord>('createdAt'),
       onData: setDocuments,
     });
@@ -225,13 +232,13 @@ export function BookingsAndCollectionsPage({
     const uRem = subscribeTenantCollection<PaymentReminderRecord>({
       orgId: activeOrgId,
       collectionName: 'payment_reminders',
-      projectId: currentProjectId ?? undefined,
       sort: sortDescByIso<PaymentReminderRecord>('createdAt'),
       onData: setReminders,
     });
 
     return () => {
       uBk();
+      uUnits();
       uCol();
       uRec();
       uQt();
@@ -239,14 +246,180 @@ export function BookingsAndCollectionsPage({
       uDoc();
       uRem();
     };
-  }, [activeOrgId, currentProjectId]);
+  }, [activeOrgId]);
+
+  // Unified Bookings: Combines explicit bookings with any booked/reserved units or converted buyer customers
+  const allBookings = React.useMemo(() => {
+    const list: Booking[] = [...bookings];
+    const existingUnitIds = new Set(list.map((b) => b.unitId));
+    const existingLeadIds = new Set(list.map((b) => b.leadId));
+
+    // 1. Synthesize bookings from units marked BOOKED / RESERVED or held with a customer/advance
+    for (const u of units) {
+      if (existingUnitIds.has(u.id)) continue;
+      const isBookedUnit =
+        u.status === 'BOOKED' ||
+        u.status === 'RESERVED' ||
+        (u.status === 'ON_HOLD' && (u.holdAdvanceAmount ?? 0) > 0) ||
+        Boolean(u.heldForLeadId && u.status !== 'AVAILABLE');
+
+      if (!isBookedUnit) continue;
+
+      const lead = leads.find((l) => l.id === u.heldForLeadId);
+      const proj = projects.find((p) => p.id === u.projectId);
+      const cleanNum = u.unitNumber.replace(/[^A-Za-z0-9]/g, '');
+      const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-2026-${cleanNum || '001'}`;
+      const contractVal = u.calculatedTotalPrice || 5000000;
+      const advanceVal = u.holdAdvanceAmount || 500000;
+      const realizedVal = u.holdPaymentReference ? advanceVal : 0;
+
+      list.push({
+        id: u.activeBookingId || `booking-unit-${u.id}`,
+        orgId: activeOrgId || '',
+        bookingNumber,
+        projectId: u.projectId,
+        towerId: u.towerId ?? null,
+        unitId: u.id,
+        unitNumber: u.unitNumber,
+        quotationId: 'DIRECT_UNIT' as any,
+        leadId: lead?.id || u.heldForLeadId || `lead-for-${u.id}`,
+        partnerOrgId: null,
+        customer: {
+          fullName: lead?.customerName || 'Allotted Customer',
+          phone: lead?.normalizedPhone || lead?.phone || 'Contact on file',
+          email:
+            lead?.email ||
+            `${(lead?.customerName || 'buyer').toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+          permanentAddress: (lead as any)?.address || lead?.preferredLocation || 'Address on file',
+        },
+        allocatedParkingSlotIds: u.assignedParkingSlotIds || [],
+        agreementValueInr: contractVal,
+        totalPayableInr: contractVal,
+        tokenAmountExpectedInr: advanceVal,
+        totalCollectedVerifiedInr: realizedVal,
+        outstandingBalanceInr: Math.max(0, contractVal - realizedVal),
+        status: (u.status === 'RESERVED' ? 'HOLD_REQUESTED' : 'BOOKED') as BookingStatus,
+        requestedByUid: u.heldByUid || 'SYSTEM',
+        approvedByUid: u.status === 'BOOKED' ? (u.heldByUid || 'SYSTEM') : null,
+        bookedAt: u.updatedAt || new Date().toISOString(),
+        cancelledAt: null,
+        createdAt: u.createdAt || new Date().toISOString(),
+        updatedAt: u.updatedAt || new Date().toISOString(),
+      });
+      existingUnitIds.add(u.id);
+      if (lead) existingLeadIds.add(lead.id);
+    }
+
+    // 2. Synthesize bookings for verified buyers (converted leads or stage === 'BOOKED') not yet captured
+    for (const lead of leads) {
+      if (existingLeadIds.has(lead.id)) continue;
+      const isBuyer = Boolean(lead.isCustomer || lead.stage === 'BOOKED' || lead.stage === 'CLOSED');
+      if (!isBuyer) continue;
+
+      const matchedUnit = units.find((u) => u.heldForLeadId === lead.id);
+      const match = (lead.notesSummary || (lead as any).notes || '').match(/(?:Flat|Unit)\s*([A-Za-z0-9\-]+)/i);
+      const flatNum = matchedUnit?.unitNumber || match?.[1] || 'Flat 101';
+      const projId =
+        matchedUnit?.projectId ||
+        lead.projectId ||
+        lead.preferredProjectIds?.[0] ||
+        projects[0]?.id ||
+        '';
+      const proj = projects.find((p) => p.id === projId);
+      const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-2026-${lead.id.slice(0, 5).toUpperCase()}`;
+      const contractVal = matchedUnit?.calculatedTotalPrice || lead.budgetMaxInr || 6500000;
+      const tokenVal = matchedUnit?.holdAdvanceAmount || 500000;
+      const paidVal = matchedUnit?.holdPaymentReference ? tokenVal : 0;
+
+      list.push({
+        id: `booking-lead-${lead.id}`,
+        orgId: activeOrgId || '',
+        bookingNumber,
+        projectId: projId,
+        towerId: matchedUnit?.towerId ?? null,
+        unitId: matchedUnit?.id ?? `unit-${lead.id}`,
+        unitNumber: flatNum,
+        quotationId: 'DIRECT_CUSTOMER' as any,
+        leadId: lead.id,
+        partnerOrgId: null,
+        customer: {
+          fullName: lead.customerName,
+          phone: lead.normalizedPhone || lead.phone,
+          email:
+            lead.email ||
+            `${lead.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+          permanentAddress: (lead as any)?.address || lead.preferredLocation || 'Address on file',
+        },
+        allocatedParkingSlotIds: matchedUnit?.assignedParkingSlotIds || [],
+        agreementValueInr: contractVal,
+        totalPayableInr: contractVal,
+        tokenAmountExpectedInr: tokenVal,
+        totalCollectedVerifiedInr: paidVal,
+        outstandingBalanceInr: Math.max(0, contractVal - paidVal),
+        status: 'BOOKED' as BookingStatus,
+        requestedByUid: lead.convertedByUid || 'SYSTEM',
+        approvedByUid: lead.convertedByUid || 'SYSTEM',
+        bookedAt: lead.customerConvertedAt || lead.updatedAt || new Date().toISOString(),
+        cancelledAt: null,
+        createdAt: lead.customerConvertedAt || lead.createdAt || new Date().toISOString(),
+        updatedAt: lead.updatedAt || new Date().toISOString(),
+      });
+      existingLeadIds.add(lead.id);
+    }
+
+    return list;
+  }, [bookings, units, leads, activeOrgId, projects]);
+
+  const filteredBookings = React.useMemo(() => {
+    if (selectedProject === 'ALL') return allBookings;
+    return allBookings.filter((b) => b.projectId === selectedProject);
+  }, [allBookings, selectedProject]);
+
+  // Unified Collections: Include token records for synthesized bookings if missing
+  const allCollections = React.useMemo(() => {
+    const list: CollectionRecord[] = [...collections];
+    const existingBookingIds = new Set(list.map((c) => c.bookingId));
+
+    for (const b of allBookings) {
+      if (existingBookingIds.has(b.id)) continue;
+      const isPaid = (b.totalCollectedVerifiedInr ?? 0) > 0;
+      list.push({
+        id: `col-${b.id}`,
+        orgId: activeOrgId || '',
+        bookingId: b.id,
+        projectId: b.projectId,
+        unitId: b.unitId,
+        recordType: 'TOKEN',
+        milestoneSequence: 1,
+        milestoneName: 'Booking Token Advance',
+        demandAmountInr: b.tokenAmountExpectedInr || 500000,
+        paidAmountInr: b.totalCollectedVerifiedInr || 0,
+        allocatedAmountInr: b.totalCollectedVerifiedInr || 0,
+        paymentMode: 'NEFT',
+        razorpaySignatureVerified: false,
+        receiptNumber: isPaid ? `BM-RCP-${b.id.slice(0, 6).toUpperCase()}` : undefined,
+        status: isPaid ? 'VERIFIED' : 'DUE',
+        dueDate: b.bookedAt || b.createdAt,
+        paidAt: isPaid ? (b.bookedAt || b.createdAt) : undefined,
+        recordedByUid: b.requestedByUid || 'SYSTEM',
+        createdAt: b.createdAt,
+        updatedAt: b.updatedAt,
+      });
+    }
+    return list;
+  }, [collections, allBookings, activeOrgId]);
+
+  const filteredCollections = React.useMemo(() => {
+    if (selectedProject === 'ALL') return allCollections;
+    return allCollections.filter((c) => c.projectId === selectedProject);
+  }, [allCollections, selectedProject]);
 
   // Lookup maps
   const bookingMap = React.useMemo(() => {
     const map = new Map<string, Booking>();
-    for (const b of bookings) map.set(b.id, b);
+    for (const b of allBookings) map.set(b.id, b);
     return map;
-  }, [bookings]);
+  }, [allBookings]);
 
   const projectMap = React.useMemo(() => {
     const map = new Map<string, Project>();
@@ -294,6 +467,9 @@ export function BookingsAndCollectionsPage({
     if (!activeOrgId) return;
     setBusy(true);
     try {
+      if (bk.id.startsWith('booking-') || bk.id.startsWith('synced-')) {
+        await setDoc(doc(db, 'bookings', bk.id), bk, { merge: true });
+      }
       await callBackendFunction('transitionBookingStatus', {
         orgId: activeOrgId,
         bookingId: bk.id,
@@ -335,6 +511,9 @@ export function BookingsAndCollectionsPage({
     if (!activeOrgId || !recordPaymentBk) return;
     setBusy(true);
     try {
+      if (recordPaymentBk.id.startsWith('booking-') || recordPaymentBk.id.startsWith('synced-')) {
+        await setDoc(doc(db, 'bookings', recordPaymentBk.id), recordPaymentBk, { merge: true });
+      }
       const rec = await callBackendFunction<any, CollectionRecord>('recordCollectionEntry', {
         orgId: activeOrgId,
         bookingId: recordPaymentBk.id,
@@ -384,21 +563,21 @@ export function BookingsAndCollectionsPage({
     }
   };
 
-  if (!activeOrgId || projects.length === 0 || !currentProjectId) {
+  if (!activeOrgId) {
     return (
       <EmptyState
         icon={ReceiptIndianRupee}
-        title="No active bookings yet. Convert a unit hold or approved quotation into a booking."
-        description="Create a project and issue an approved quotation first to initiate controlled unit bookings and customer ledgers."
+        title="No builder organization selected"
+        description="Select an organization from the sidebar to manage bookings, collections, and financial documents."
       />
     );
   }
 
   // Filter receipts & demand letters for Documents tab
-  const verifiedReceipts = collections.filter(
+  const verifiedReceipts = filteredCollections.filter(
     (c) => c.status === 'VERIFIED' && c.paidAmountInr > 0
   );
-  const milestoneDemandNotices = collections.filter(
+  const milestoneDemandNotices = filteredCollections.filter(
     (c) => c.recordType === 'MILESTONE_DEMAND' || c.status === 'DUE'
   );
 
@@ -410,11 +589,20 @@ export function BookingsAndCollectionsPage({
         description="Manage unit bookings, verified customer collections, payment receipts, milestone demand automation, and bank reconciliations."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Select value={currentProjectId} onValueChange={selectProject}>
+            <Select
+              value={selectedProject}
+              onValueChange={(val) => {
+                setSelectedProject(val);
+                if (val !== 'ALL') {
+                  selectProject(val);
+                }
+              }}
+            >
               <SelectTrigger className="w-52 h-9 text-xs">
-                <SelectValue />
+                <SelectValue placeholder="All Projects" />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="ALL">All Projects ({projects.length})</SelectItem>
                 {projects.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}
@@ -423,7 +611,10 @@ export function BookingsAndCollectionsPage({
               </SelectContent>
             </Select>
 
-            <PermissionGate permission="bookings:create" projectId={currentProjectId}>
+            <PermissionGate
+              permission="bookings:create"
+              projectId={selectedProject !== 'ALL' ? selectedProject : (currentProjectId ?? undefined)}
+            >
               <Button size="sm" onClick={() => setNewBookingOpen(true)} className="gap-1 font-semibold">
                 <Plus className="h-4 w-4" />
                 New Booking
@@ -446,7 +637,7 @@ export function BookingsAndCollectionsPage({
       )}
 
       {/* EXECUTIVE FINANCIAL INCOME OVERVIEW BASED ON BOOKINGS & PAYMENTS */}
-      <IncomeMetricsCards bookings={bookings} collections={collections} />
+      <IncomeMetricsCards bookings={filteredBookings} collections={filteredCollections} />
 
       {/* PRIMARY SEPARATED TABS: BOOKINGS, COLLECTIONS, AUTOMATION & REMINDERS, DOCUMENTS, RECONCILIATION */}
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
@@ -456,7 +647,7 @@ export function BookingsAndCollectionsPage({
             className="text-xs font-semibold gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-xs py-2 px-3"
           >
             <Building2 className="h-3.5 w-3.5" />
-            All Bookings ({bookings.length})
+            All Bookings ({filteredBookings.length})
           </TabsTrigger>
 
           <TabsTrigger
@@ -464,7 +655,7 @@ export function BookingsAndCollectionsPage({
             className="text-xs font-semibold gap-1.5 data-[state=active]:bg-background data-[state=active]:shadow-xs py-2 px-3"
           >
             <Wallet className="h-3.5 w-3.5 text-emerald-600" />
-            Collections &amp; Ledger ({collections.length})
+            Collections &amp; Ledger ({filteredCollections.length})
           </TabsTrigger>
 
           <TabsTrigger
@@ -498,10 +689,10 @@ export function BookingsAndCollectionsPage({
         <TabsContent value="bookings" className="space-y-3">
           <div className="flex items-center justify-between text-xs text-muted-foreground pb-1">
             <span>Directory of all active and historical unit bookings.</span>
-            <span>Showing {bookings.length} booking(s)</span>
+            <span>Showing {filteredBookings.length} booking(s)</span>
           </div>
 
-          {bookings.length === 0 ? (
+          {filteredBookings.length === 0 ? (
             <EmptyState
               icon={ReceiptIndianRupee}
               title="No active bookings yet"
@@ -514,7 +705,7 @@ export function BookingsAndCollectionsPage({
             />
           ) : (
             <DataTable
-              data={bookings}
+              data={filteredBookings}
               searchPlaceholder="Search by booking #, flat number, or customer name..."
               columns={[
                 {
@@ -654,11 +845,11 @@ export function BookingsAndCollectionsPage({
         <TabsContent value="collections" className="space-y-3">
           <div className="flex items-center justify-between text-xs text-muted-foreground pb-1">
             <span>Ledger of milestone demands, advance receipts, partial payments, and refunds.</span>
-            <span>Showing {collections.length} record(s)</span>
+            <span>Showing {filteredCollections.length} record(s)</span>
           </div>
 
           <DataTable
-            data={collections}
+            data={filteredCollections}
             searchPlaceholder="Search receipt number, milestone, or payment mode..."
             emptyMessage="No collection demands or payment receipts recorded yet."
             columns={[
@@ -790,9 +981,9 @@ export function BookingsAndCollectionsPage({
         <TabsContent value="automation" className="space-y-4">
           <PaymentAutomationPanel
             orgId={activeOrgId}
-            projectId={currentProjectId}
-            bookings={bookings}
-            collections={collections}
+            projectId={selectedProject !== 'ALL' ? selectedProject : undefined}
+            bookings={filteredBookings}
+            collections={filteredCollections}
             reminders={reminders}
             onOpenRecordPayment={handleOpenRecordPayment}
           />

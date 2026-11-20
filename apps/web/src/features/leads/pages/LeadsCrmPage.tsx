@@ -369,9 +369,17 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
         ? `${convertNotes.trim()} (Purchased Flat: ${convertFlat.trim()})`
         : convertNotes.trim();
 
+      const matchedUnit = units.find(
+        (u) =>
+          u.heldForLeadId === convertTargetLead.id ||
+          (convertFlat && u.unitNumber.toLowerCase() === convertFlat.trim().toLowerCase())
+      );
+
       const updated = await callBackendFunction<any, Lead>('convertLeadToCustomer', {
         orgId: activeOrgId,
         leadId: convertTargetLead.id,
+        unitId: matchedUnit?.id,
+        flatNumber: convertFlat.trim() || undefined,
         notes: noteText || 'Converted from Prospect to verified Customer.',
       });
 

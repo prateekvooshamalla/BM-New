@@ -6,6 +6,8 @@ import { z } from 'zod';
 import {
   toMinorUnits,
   validateUnitTransition,
+  type Booking,
+  type CollectionRecord,
   type Lead,
   type Project,
   type ProjectStats,
@@ -468,8 +470,13 @@ export async function transitionUnitStatusService(
     }
 
     const projRef = db.collection('projects').doc(unit.projectId);
-    if (input.action === 'HOLD' || input.action === 'RESERVE') {
-      const leadId = input.leadId ?? unit.heldForLeadId;
+    const projSnap = await tx.get(projRef);
+    const proj = projSnap.exists ? (projSnap.data() as Project) : null;
+
+    let activeBookingId: string | null = unit.activeBookingId ?? null;
+    const leadId = input.leadId ?? unit.heldForLeadId ?? null;
+
+    if (input.action === 'HOLD' || input.action === 'RESERVE' || input.action === 'BOOK') {
       if (leadId) {
         const leadRef = db.collection('leads').doc(leadId);
         const leadSnap = await tx.get(leadRef);
@@ -479,8 +486,9 @@ export async function transitionUnitStatusService(
         const leadData = leadSnap.data() as Lead;
         // Automatically mark customer status upon reservation / booking / hold
         const nextStage: Lead['stage'] =
-          input.action === 'RESERVE' &&
-          !['BOOKED', 'CLOSED'].includes(leadData.stage)
+          input.action === 'BOOK' || input.targetStatus === 'BOOKED'
+            ? 'BOOKED'
+            : input.action === 'RESERVE' && !['BOOKED', 'CLOSED'].includes(leadData.stage)
             ? 'NEGOTIATION'
             : leadData.stage;
         tx.update(leadRef, {
@@ -489,13 +497,82 @@ export async function transitionUnitStatusService(
           stage: nextStage,
           updatedAt: nowIso,
         });
+
+        // If target status is BOOKED and no active booking exists, create official Booking record
+        if (input.targetStatus === 'BOOKED' && !activeBookingId) {
+          const bkRef = db.collection('bookings').doc();
+          const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-${now.getFullYear()}-${bkRef.id.slice(0, 5).toUpperCase()}`;
+          const contractVal = unit.calculatedTotalPrice || 5000000;
+          const advanceVal = input.holdAdvanceAmount ?? unit.holdAdvanceAmount ?? 500000;
+          const hasRef = Boolean(input.holdPaymentReference?.trim() || unit.holdPaymentReference?.trim());
+          const paidVal = hasRef ? advanceVal : 0;
+
+          const bk: Booking = {
+            id: bkRef.id,
+            orgId: input.orgId,
+            bookingNumber,
+            projectId: unit.projectId,
+            towerId: unit.towerId ?? null,
+            unitId: unit.id,
+            unitNumber: unit.unitNumber,
+            quotationId: 'DIRECT_INVENTORY' as any,
+            leadId: leadData.id,
+            partnerOrgId: null,
+            customer: {
+              fullName: leadData.customerName,
+              phone: leadData.normalizedPhone || leadData.phone,
+              email: leadData.email || `${leadData.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+              permanentAddress: leadData.address || 'Address on file',
+            },
+            allocatedParkingSlotIds: unit.assignedParkingSlotIds || [],
+            agreementValueInr: contractVal,
+            totalPayableInr: contractVal,
+            tokenAmountExpectedInr: advanceVal,
+            totalCollectedVerifiedInr: paidVal,
+            outstandingBalanceInr: Math.max(0, contractVal - paidVal),
+            status: 'BOOKED',
+            requestedByUid: actor.uid,
+            approvedByUid: actor.uid,
+            bookedAt: nowIso,
+            cancelledAt: null,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+          tx.set(bkRef, bk);
+          activeBookingId = bk.id;
+
+          // Create collection record for advance/token
+          const colRef = db.collection('collection_records').doc();
+          const col: CollectionRecord = {
+            id: colRef.id,
+            orgId: input.orgId,
+            bookingId: bk.id,
+            projectId: unit.projectId,
+            unitId: unit.id,
+            recordType: 'TOKEN',
+            milestoneSequence: 1,
+            milestoneName: 'Booking Token / Advance',
+            demandAmountInr: advanceVal,
+            paidAmountInr: paidVal,
+            allocatedAmountInr: paidVal,
+            paymentMode: 'NEFT',
+            razorpaySignatureVerified: false,
+            receiptNumber: hasRef ? `BM-RCP-${colRef.id.slice(0, 6).toUpperCase()}` : undefined,
+            status: hasRef ? 'VERIFIED' : 'DUE',
+            dueDate: nowIso,
+            paidAt: hasRef ? nowIso : undefined,
+            recordedByUid: actor.uid,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+          tx.set(colRef, col);
+        }
       }
       if ((input.holdAdvanceAmount ?? 0) > 0 && !leadId) throw new HttpsError('invalid-argument', 'Select a customer for the advance.');
       if ((input.holdAdvanceAmount ?? 0) > 0 && !input.holdPaymentReference?.trim()) {
         throw new HttpsError('invalid-argument', 'Enter a receipt or payment reference for the advance.');
       }
     }
-    const projSnap = await tx.get(projRef);
 
     const holdHours = input.holdDurationHours ?? 48;
     const holdExpiresAt =
@@ -510,15 +587,15 @@ export async function transitionUnitStatusService(
       holdPaymentReference: input.targetStatus === 'AVAILABLE' ? null : (input.holdPaymentReference ?? unit.holdPaymentReference ?? null),
       holdExpiresAt,
       heldByUid:
-        input.targetStatus === 'ON_HOLD' || input.targetStatus === 'RESERVED'
+        input.targetStatus === 'ON_HOLD' || input.targetStatus === 'RESERVED' || input.targetStatus === 'BOOKED'
           ? actor.uid
           : null,
       heldForLeadId:
-        input.targetStatus === 'ON_HOLD' || input.targetStatus === 'RESERVED'
-          ? (input.leadId ?? unit.heldForLeadId ?? null)
+        input.targetStatus === 'ON_HOLD' || input.targetStatus === 'RESERVED' || input.targetStatus === 'BOOKED'
+          ? (leadId ?? null)
           : null,
       activeBookingId:
-        input.targetStatus === 'AVAILABLE' ? null : unit.activeBookingId,
+        input.targetStatus === 'AVAILABLE' ? null : (activeBookingId || unit.activeBookingId || null),
       updatedAt: nowIso,
     };
 

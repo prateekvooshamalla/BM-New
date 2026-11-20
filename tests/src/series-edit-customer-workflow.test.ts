@@ -332,6 +332,12 @@ describe('Flat Series Number, Edit Options & Customer Conversion Workflow', () =
     expect(converted.customerConvertedAt).toBeDefined();
     expect(converted.convertedByUid).toBe(ADMIN.uid);
 
+    // Verify booking record was created and appears in bookings
+    const bkSnap = await db.collection('bookings').where('leadId', '==', prospect.id).get();
+    expect(bkSnap.empty).toBe(false);
+    expect(bkSnap.docs[0]!.data().customer.fullName).toBe('Ananya Sharma');
+    expect(bkSnap.docs[0]!.data().status).toBe('BOOKED');
+
     // Verify lead activity was logged
     const activitiesSnap = await db
       .collection('lead_activities')
@@ -340,6 +346,67 @@ describe('Flat Series Number, Edit Options & Customer Conversion Workflow', () =
     const activities = activitiesSnap.docs.map((d) => d.data());
     const conversionAct = activities.find((a) => a.title.includes('Converted from Prospect to Customer'));
     expect(conversionAct).toBeDefined();
+  });
+
+  it('books flat directly in inventory and automatically generates official booking and token receipt', async () => {
+    const { db, org, project, tower } = await setupProjectFixture();
+
+    const flat = await createUnitService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      towerId: tower.id,
+      towerName: tower.name,
+      floorNumber: 3,
+      series: '02',
+      unitNumber: 'TA-302',
+      unitType: 'APARTMENT',
+      bhk: '2 BHK',
+      saleableAreaSqft: 1200,
+      carpetAreaSqft: 850,
+      facing: 'NORTH',
+      baseRatePerSqft: 8000,
+      isCorner: false,
+      parkingEntitlementCount: 1,
+      listingMode: 'BUY',
+    });
+
+    const { lead } = await ingestLeadService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      projectId: project.id,
+      customerName: 'Kavita Reddy',
+      phone: '+919876543299',
+      source: 'MANUAL',
+      whatsappOptIn: true,
+    });
+
+    const bookedUnit = await transitionUnitStatusService(db, ADMIN, 'BUILDER_ADMIN', {
+      orgId: org.id,
+      unitId: flat.id,
+      targetStatus: 'BOOKED',
+      action: 'BOOK',
+      leadId: lead.id,
+      holdAdvanceAmount: 200000,
+      holdPaymentReference: 'UTR-BOOK-998811',
+    });
+
+    expect(bookedUnit.status).toBe('BOOKED');
+    expect(bookedUnit.heldForLeadId).toBe(lead.id);
+    expect(bookedUnit.activeBookingId).toBeDefined();
+
+    // Verify booking record was created in 'bookings' collection
+    const bkSnap = await db.collection('bookings').doc(bookedUnit.activeBookingId!).get();
+    expect(bkSnap.exists).toBe(true);
+    const bk = bkSnap.data();
+    expect(bk?.unitNumber).toBe('TA-302');
+    expect(bk?.customer.fullName).toBe('Kavita Reddy');
+    expect(bk?.status).toBe('BOOKED');
+    expect(bk?.totalCollectedVerifiedInr).toBe(200000);
+
+    // Verify collection token receipt was created in 'collection_records'
+    const colSnap = await db.collection('collection_records').where('bookingId', '==', bk?.id).get();
+    expect(colSnap.empty).toBe(false);
+    expect(colSnap.docs[0]!.data().status).toBe('VERIFIED');
+    expect(colSnap.docs[0]!.data().paidAmountInr).toBe(200000);
   });
 
   it('enforces tower floor limits on bulk generation, unit creation, and unit update', async () => {
