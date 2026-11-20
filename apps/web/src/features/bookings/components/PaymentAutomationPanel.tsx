@@ -100,11 +100,11 @@ export function PaymentAutomationPanel({
           id: col.id,
           bookingId: bk.id,
           collectionRecordId: col.id,
-          customerName: bk.customer.fullName,
-          customerPhone: bk.customer.phone,
-          customerEmail: bk.customer.email,
-          unitNumber: bk.unitNumber,
-          milestoneName: col.milestoneName,
+          customerName: bk.customer?.fullName || 'Customer',
+          customerPhone: bk.customer?.phone || '',
+          customerEmail: bk.customer?.email || '',
+          unitNumber: bk.unitNumber || 'Unit',
+          milestoneName: col.milestoneName || 'Milestone Demand',
           amountDueInr: amountDue,
           dueDate: col.dueDate,
           category: 'OVERDUE',
@@ -137,11 +137,11 @@ export function PaymentAutomationPanel({
           id: col.id,
           bookingId: bk.id,
           collectionRecordId: col.id,
-          customerName: bk.customer.fullName,
-          customerPhone: bk.customer.phone,
-          customerEmail: bk.customer.email,
-          unitNumber: bk.unitNumber,
-          milestoneName: col.milestoneName,
+          customerName: bk.customer?.fullName || 'Customer',
+          customerPhone: bk.customer?.phone || '',
+          customerEmail: bk.customer?.email || '',
+          unitNumber: bk.unitNumber || 'Unit',
+          milestoneName: col.milestoneName || 'Milestone Demand',
           amountDueInr: amountDue,
           dueDate: col.dueDate,
           category: 'DUE_SOON',
@@ -160,9 +160,9 @@ export function PaymentAutomationPanel({
           list.push({
             id: `bk_${bk.id}`,
             bookingId: bk.id,
-            customerName: bk.customer.fullName,
-            customerPhone: bk.customer.phone,
-            customerEmail: bk.customer.email,
+            customerName: bk.customer?.fullName || 'Customer',
+            customerPhone: bk.customer?.phone || '',
+            customerEmail: bk.customer?.email || '',
             unitNumber: bk.unitNumber,
             milestoneName: 'Booking Token Advance',
             amountDueInr: bk.tokenAmountExpectedInr || bk.outstandingBalanceInr,
@@ -188,10 +188,10 @@ export function PaymentAutomationPanel({
     const q = search.trim().toLowerCase();
     return items.filter(
       (item) =>
-        item.customerName.toLowerCase().includes(q) ||
-        item.unitNumber.toLowerCase().includes(q) ||
-        item.customerPhone.includes(q) ||
-        item.milestoneName.toLowerCase().includes(q)
+        (item.customerName || '').toLowerCase().includes(q) ||
+        (item.unitNumber || '').toLowerCase().includes(q) ||
+        (item.customerPhone || '').includes(q) ||
+        (item.milestoneName || '').toLowerCase().includes(q)
     );
   };
 
@@ -265,7 +265,7 @@ export function PaymentAutomationPanel({
           list.push({
             id: c.id,
             dueDate: c.dueDate,
-            customerName: bk.customer.fullName,
+            customerName: bk.customer?.fullName || 'Customer',
             unitNumber: bk.unitNumber,
             milestoneName: c.milestoneName,
             amountDueInr: c.demandAmountInr - (c.paidAmountInr || 0),

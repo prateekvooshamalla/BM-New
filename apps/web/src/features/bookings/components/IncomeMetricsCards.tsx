@@ -96,7 +96,7 @@ export function IncomeMetricsCards({ bookings, collections }: IncomeMetricsCards
   const tokenCollectionsInr = React.useMemo(
     () =>
       collections
-        .filter((c) => c.status === 'VERIFIED' && (c.recordType === 'TOKEN' || c.milestoneName.toLowerCase().includes('token')))
+        .filter((c) => c.status === 'VERIFIED' && (c.recordType === 'TOKEN' || (c.milestoneName || '').toLowerCase().includes('token')))
         .reduce((acc, c) => acc + (c.paidAmountInr || 0), 0),
     [collections]
   );
@@ -104,7 +104,7 @@ export function IncomeMetricsCards({ bookings, collections }: IncomeMetricsCards
   const milestoneCollectionsInr = React.useMemo(
     () =>
       collections
-        .filter((c) => c.status === 'VERIFIED' && c.recordType !== 'TOKEN' && !c.milestoneName.toLowerCase().includes('token'))
+        .filter((c) => c.status === 'VERIFIED' && c.recordType !== 'TOKEN' && !(c.milestoneName || '').toLowerCase().includes('token'))
         .reduce((acc, c) => acc + (c.paidAmountInr || 0), 0),
     [collections]
   );

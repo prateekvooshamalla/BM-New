@@ -83,7 +83,64 @@ export interface BookingsAndCollectionsPageProps {
   defaultTab?: 'bookings' | 'collections' | 'automation' | 'documents' | 'reconciliation';
 }
 
-export function BookingsAndCollectionsPage({
+class BookingsErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('BookingsAndCollectionsPage error caught:', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-8 rounded-xl border border-destructive/30 bg-destructive/5 text-destructive space-y-4 max-w-2xl mx-auto my-8">
+          <div className="flex items-center gap-2.5 font-bold text-lg">
+            <ShieldAlert className="h-6 w-6 text-destructive" />
+            Unable to render Bookings and Collections
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {this.state.error?.message ||
+              'A runtime exception was prevented while displaying booking records.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => this.setState({ hasError: false, error: null })}
+            >
+              Retry
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => window.location.reload()}
+            >
+              Refresh Page
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function BookingsAndCollectionsPage(props: BookingsAndCollectionsPageProps = {}) {
+  return (
+    <BookingsErrorBoundary>
+      <BookingsAndCollectionsContent {...props} />
+    </BookingsErrorBoundary>
+  );
+}
+
+function BookingsAndCollectionsContent({
   defaultTab,
 }: BookingsAndCollectionsPageProps = {}) {
   const location = useLocation();
@@ -256,18 +313,23 @@ export function BookingsAndCollectionsPage({
   const allBookings = React.useMemo(() => {
     const list: Booking[] = bookings.map((b) => {
       const advPaid = b.advancePaidAmountInr ?? b.totalCollectedVerifiedInr ?? 0;
-      const advRef = b.advancePaymentReference || (advPaid > 0 ? `NEFT-ADV-${b.bookingNumber.slice(-5)}` : null);
+      const bkNum = b.bookingNumber || b.id || '00001';
+      const advRef = b.advancePaymentReference || (advPaid > 0 ? `NEFT-ADV-${bkNum.slice(-5)}` : null);
+      const contractVal = b.totalPayableInr || b.agreementValueInr || 5000000;
       const schedule = b.paymentSchedule && b.paymentSchedule.length > 0
         ? b.paymentSchedule
         : generateBookingPaymentSchedule({
-            contractValueInr: b.totalPayableInr,
+            contractValueInr: contractVal,
             advancePaidInr: advPaid,
             advancePaymentRef: advRef,
             startDateIso: b.bookedAt || b.createdAt,
           });
       const lead = leads.find((l) => l.id === b.leadId);
+      const cust = b.customer || ({} as any);
       return {
         ...b,
+        bookingNumber: bkNum,
+        totalPayableInr: contractVal,
         advancePaidAmountInr: advPaid,
         advancePaymentReference: advRef,
         advancePaymentMode: b.advancePaymentMode || 'NEFT',
@@ -275,11 +337,13 @@ export function BookingsAndCollectionsPage({
         paymentPlanName: b.paymentPlanName || 'Standard Construction-Linked Plan (CLP)',
         paymentSchedule: schedule,
         customer: {
-          ...b.customer,
-          panNumber: b.customer.panNumber || (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
-          aadhaarLast4: b.customer.aadhaarLast4 || (lead as any)?.aadhaarLast4 || '8901',
-          permanentAddress: b.customer.permanentAddress || (lead as any)?.address || lead?.preferredLocation || 'Address on file',
-          coApplicantName: b.customer.coApplicantName || (lead as any)?.coApplicantName || undefined,
+          fullName: cust.fullName || lead?.customerName || 'Allotted Customer',
+          phone: cust.phone || lead?.normalizedPhone || lead?.phone || 'Contact on file',
+          email: cust.email || lead?.email || 'buyer@customer.in',
+          panNumber: cust.panNumber || (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
+          aadhaarLast4: cust.aadhaarLast4 || (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice?.(-4) || '8901',
+          permanentAddress: cust.permanentAddress || (lead as any)?.address || lead?.preferredLocation || 'Address on file',
+          coApplicantName: cust.coApplicantName || (lead as any)?.coApplicantName || undefined,
         },
       };
     });
@@ -299,7 +363,7 @@ export function BookingsAndCollectionsPage({
 
       const lead = leads.find((l) => l.id === u.heldForLeadId);
       const proj = projects.find((p) => p.id === u.projectId);
-      const cleanNum = u.unitNumber.replace(/[^A-Za-z0-9]/g, '');
+      const cleanNum = (u.unitNumber || '001').replace(/[^A-Za-z0-9]/g, '');
       const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-2026-${cleanNum || '001'}`;
       const contractVal = u.calculatedTotalPrice || 5000000;
       const advanceVal = u.holdAdvanceAmount || (u.holdPaymentReference ? 500000 : 0);
@@ -330,9 +394,11 @@ export function BookingsAndCollectionsPage({
           phone: lead?.normalizedPhone || lead?.phone || 'Contact on file',
           email:
             lead?.email ||
-            `${(lead?.customerName || 'buyer').toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+            (lead?.customerName
+              ? `${lead.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`
+              : 'buyer@customer.in'),
           panNumber: (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
-          aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice(-4) || '8901',
+          aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice?.(-4) || '8901',
           permanentAddress: (lead as any)?.address || lead?.preferredLocation || 'Address on file',
           coApplicantName: (lead as any)?.coApplicantName || undefined,
         },
@@ -376,11 +442,12 @@ export function BookingsAndCollectionsPage({
         projects[0]?.id ||
         '';
       const proj = projects.find((p) => p.id === projId);
-      const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-2026-${lead.id.slice(0, 5).toUpperCase()}`;
+      const leadIdStr = lead.id || '00000';
+      const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-2026-${leadIdStr.slice(0, 5).toUpperCase()}`;
       const contractVal = matchedUnit?.calculatedTotalPrice || lead.budgetMaxInr || 6500000;
       const tokenVal = matchedUnit?.holdAdvanceAmount || 500000;
       const paidVal = matchedUnit?.holdPaymentReference ? tokenVal : 0;
-      const advRef = matchedUnit?.holdPaymentReference || (paidVal > 0 ? `NEFT-ADV-${lead.id.slice(0, 5).toUpperCase()}` : null);
+      const advRef = matchedUnit?.holdPaymentReference || (paidVal > 0 ? `NEFT-ADV-${leadIdStr.slice(0, 5).toUpperCase()}` : null);
       const bookingDate = lead.customerConvertedAt || lead.updatedAt || new Date().toISOString();
 
       const schedule = generateBookingPaymentSchedule({
@@ -402,13 +469,15 @@ export function BookingsAndCollectionsPage({
         leadId: lead.id,
         partnerOrgId: null,
         customer: {
-          fullName: lead.customerName,
-          phone: lead.normalizedPhone || lead.phone,
+          fullName: lead.customerName || 'Allotted Customer',
+          phone: lead.normalizedPhone || lead.phone || 'Contact on file',
           email:
             lead.email ||
-            `${lead.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+            (lead.customerName
+              ? `${lead.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`
+              : 'buyer@customer.in'),
           panNumber: (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
-          aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice(-4) || '8901',
+          aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice?.(-4) || '8901',
           permanentAddress: (lead as any)?.address || lead.preferredLocation || 'Address on file',
           coApplicantName: (lead as any)?.coApplicantName || undefined,
         },
@@ -465,7 +534,7 @@ export function BookingsAndCollectionsPage({
         allocatedAmountInr: b.totalCollectedVerifiedInr || 0,
         paymentMode: 'NEFT',
         razorpaySignatureVerified: false,
-        receiptNumber: isPaid ? `BM-RCP-${b.id.slice(0, 6).toUpperCase()}` : undefined,
+        receiptNumber: isPaid ? `BM-RCP-${(b.id || '000000').slice(0, 6).toUpperCase()}` : undefined,
         status: isPaid ? 'VERIFIED' : 'DUE',
         dueDate: b.bookedAt || b.createdAt,
         paidAt: isPaid ? (b.bookedAt || b.createdAt) : undefined,
@@ -614,6 +683,9 @@ export function BookingsAndCollectionsPage({
     customMessage?: string
   ) => {
     if (!activeOrgId) return;
+    const custName = bk.customer?.fullName || 'Customer';
+    const custPhone = bk.customer?.phone || '';
+    const custEmail = bk.customer?.email || '';
     try {
       await callBackendFunction('sendPaymentReminder', {
         orgId: activeOrgId,
@@ -621,9 +693,9 @@ export function BookingsAndCollectionsPage({
         channel,
         customMessage:
           customMessage ||
-          `Dear ${bk.customer.fullName}, reminder for Unit ${bk.unitNumber}. Milestone: ${ms.name}. Amount: ${formatInr(ms.outstandingAmountInr || ms.demandAmountInr)}. Due date: ${new Date(ms.dueDate).toLocaleDateString('en-IN')}.`,
+          `Dear ${custName}, reminder for Unit ${bk.unitNumber}. Milestone: ${ms.name}. Amount: ${formatInr(ms.outstandingAmountInr || ms.demandAmountInr)}. Due date: ${new Date(ms.dueDate).toLocaleDateString('en-IN')}.`,
       });
-      setBanner(`✓ Dispatched ${channel} payment reminder to ${bk.customer.fullName} for "${ms.name}".`);
+      setBanner(`✓ Dispatched ${channel} payment reminder to ${custName} for "${ms.name}".`);
     } catch {
       const remRef = doc(db, 'payment_reminders', `rem-${Date.now()}`);
       await setDoc(remRef, {
@@ -631,9 +703,9 @@ export function BookingsAndCollectionsPage({
         orgId: activeOrgId,
         projectId: bk.projectId,
         bookingId: bk.id,
-        customerName: bk.customer.fullName,
-        customerPhone: bk.customer.phone,
-        customerEmail: bk.customer.email,
+        customerName: custName,
+        customerPhone: custPhone,
+        customerEmail: custEmail,
         unitNumber: bk.unitNumber,
         milestoneName: ms.name,
         amountDueInr: ms.outstandingAmountInr || ms.demandAmountInr,
@@ -644,7 +716,7 @@ export function BookingsAndCollectionsPage({
         createdAt: new Date().toISOString(),
         sentAt: new Date().toISOString(),
       });
-      setBanner(`✓ Reminder recorded & dispatched to ${bk.customer.fullName} via ${channel}.`);
+      setBanner(`✓ Reminder recorded & dispatched to ${custName} via ${channel}.`);
     }
   };
 
@@ -850,15 +922,22 @@ export function BookingsAndCollectionsPage({
                   header: 'Customer & KYC',
                   cell: ({ row }) => {
                     const c = row.original.customer;
+                    const leadId = row.original.leadId;
                     return (
                       <div className="space-y-0.5">
-                        <div className="font-semibold text-foreground">
-                          {c.fullName}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/builder/customers?leadId=${leadId}`)}
+                          className="font-semibold text-primary hover:underline text-left flex items-center gap-1 group cursor-pointer"
+                          title="Click to view Customer Profile in CRM"
+                        >
+                          <span>{c?.fullName || 'Customer'}</span>
+                          <ExternalLink className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                        </button>
                         <div className="text-xs text-muted-foreground">
-                          {c.phone}
+                          {c?.phone || 'No phone'}
                         </div>
-                        {c.panNumber && (
+                        {c?.panNumber && (
                           <div className="text-[10px] font-mono text-slate-500">
                             PAN: {c.panNumber}
                           </div>
@@ -1056,9 +1135,22 @@ export function BookingsAndCollectionsPage({
                   const bk = bookingMap.get(col.bookingId);
                   return (
                     <div>
-                      <div className="font-semibold text-foreground">{col.milestoneName}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {bk?.customer.fullName ?? 'Customer'} · Unit {col.unitId || bk?.unitNumber}
+                      <div className="font-semibold text-foreground">{col.milestoneName || 'Milestone Demand'}</div>
+                      <div className="text-xs text-muted-foreground flex items-center gap-1">
+                        {bk?.customer?.fullName ? (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/builder/customers?leadId=${bk.leadId}`)}
+                            className="text-primary hover:underline font-medium cursor-pointer"
+                            title="View customer profile in CRM"
+                          >
+                            {bk.customer.fullName}
+                          </button>
+                        ) : (
+                          <span>Customer</span>
+                        )}
+                        <span>·</span>
+                        <span>Unit {col.unitId || bk?.unitNumber}</span>
                       </div>
                     </div>
                   );
@@ -1214,7 +1306,7 @@ export function BookingsAndCollectionsPage({
                       >
                         <div className="flex items-center justify-between font-semibold">
                           <span className="text-emerald-700 dark:text-emerald-400 font-bold">
-                            {rcp.receiptNumber || `BM-RCP-${rcp.id.slice(0, 6).toUpperCase()}`}
+                            {rcp.receiptNumber || `BM-RCP-${(rcp.id || '000000').slice(0, 6).toUpperCase()}`}
                           </span>
                           <span className="font-bold text-foreground">
                             {formatInr(rcp.paidAmountInr)}
@@ -1222,7 +1314,7 @@ export function BookingsAndCollectionsPage({
                         </div>
                         <div className="text-muted-foreground flex items-center justify-between text-[11px]">
                           <span>
-                            {bk?.customer.fullName} · Flat {rcp.unitId || bk?.unitNumber}
+                            {bk?.customer?.fullName || 'Customer'} · Flat {rcp.unitId || bk?.unitNumber}
                           </span>
                           <span>
                             {new Date(rcp.paidAt || rcp.createdAt).toLocaleDateString()}
@@ -1281,7 +1373,7 @@ export function BookingsAndCollectionsPage({
                         </div>
                         <div className="text-muted-foreground flex items-center justify-between text-[11px]">
                           <span>
-                            {bk?.customer.fullName} · Flat {dmd.unitId || bk?.unitNumber}
+                            {bk?.customer?.fullName || 'Customer'} · Flat {dmd.unitId || bk?.unitNumber}
                           </span>
                           <span className="font-medium text-amber-700 dark:text-amber-400">
                             Due: {dmd.dueDate ? new Date(dmd.dueDate).toLocaleDateString() : 'On Demand'}
@@ -1463,7 +1555,7 @@ export function BookingsAndCollectionsPage({
             <DialogTitle>Record Collection / Milestone Demand</DialogTitle>
             <DialogDescription>
               {recordPaymentBk &&
-                `For Unit ${recordPaymentBk.unitNumber} (${recordPaymentBk.customer.fullName})`}
+                `For Unit ${recordPaymentBk.unitNumber} (${recordPaymentBk.customer?.fullName || 'Customer'})`}
             </DialogDescription>
           </DialogHeader>
 

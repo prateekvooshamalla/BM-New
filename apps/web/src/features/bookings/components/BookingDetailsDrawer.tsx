@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   Bell,
@@ -107,12 +108,27 @@ export function BookingDetailsDrawer({
   const [selectedMilestoneForReminder, setSelectedMilestoneForReminder] = React.useState<string>('');
   const [customReminderMsg, setCustomReminderMsg] = React.useState<string>('');
   const [isSubmittingReminder, setIsSubmittingReminder] = React.useState(false);
+  const navigate = useNavigate();
 
   if (!booking) return null;
 
   const project = projects.find((p) => p.id === booking.projectId);
   const matchedUnit = units.find((u) => u.id === booking.unitId || u.unitNumber === booking.unitNumber);
   const matchedLead = leads.find((l) => l.id === booking.leadId);
+
+  // Safe Customer Profile fallback
+  const customer = React.useMemo(() => {
+    const c = booking.customer || ({} as any);
+    return {
+      fullName: c.fullName || matchedLead?.customerName || 'Allotted Customer',
+      phone: c.phone || matchedLead?.normalizedPhone || matchedLead?.phone || '',
+      email: c.email || matchedLead?.email || 'buyer@customer.in',
+      panNumber: c.panNumber || (c as any).pan || (matchedLead as any)?.panNumber || (matchedLead as any)?.pan || 'ABCDE1234F',
+      aadhaarLast4: c.aadhaarLast4 || (matchedLead as any)?.aadhaarLast4 || (matchedLead as any)?.aadhaar?.slice(-4) || '8901',
+      permanentAddress: c.permanentAddress || (matchedLead as any)?.address || matchedLead?.preferredLocation || 'Address on file',
+      coApplicantName: c.coApplicantName || (matchedLead as any)?.coApplicantName || 'None registered (Sole Applicant)',
+    };
+  }, [booking.customer, matchedLead]);
 
   // Derive advance paid and payment details
   const advancePaidInr =
@@ -158,22 +174,22 @@ export function BookingDetailsDrawer({
   const bookingReminders = reminders.filter(
     (r) =>
       r.bookingId === booking.id ||
-      r.customerPhone === booking.customer.phone ||
+      r.customerPhone === customer.phone ||
       (matchedLead && (r as any).leadId === matchedLead.id)
   );
 
   const handleQuickWhatsApp = () => {
-    const phone = booking.customer.phone.replace(/[^0-9]/g, '');
-    const text = `Hello ${booking.customer.fullName}, greetings from ${project?.name || 'Bharat Makaan'}. Regarding your booking for Flat ${booking.unitNumber}.`;
+    const phone = (customer.phone || '').replace(/[^0-9]/g, '');
+    const text = `Hello ${customer.fullName}, greetings from ${project?.name || 'Bharat Makaan'}. Regarding your booking for Flat ${booking.unitNumber}.`;
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank');
   };
 
   const handleQuickCall = () => {
-    window.location.href = `tel:${booking.customer.phone}`;
+    if (customer.phone) window.location.href = `tel:${customer.phone}`;
   };
 
   const handleQuickEmail = () => {
-    window.location.href = `mailto:${booking.customer.email}?subject=${encodeURIComponent(`Booking Confirmation & Dossier - Flat ${booking.unitNumber}`)}`;
+    if (customer.email) window.location.href = `mailto:${customer.email}?subject=${encodeURIComponent(`Booking Confirmation & Dossier - Flat ${booking.unitNumber}`)}`;
   };
 
   const handlePrintDossier = () => {
@@ -194,7 +210,7 @@ export function BookingDetailsDrawer({
         await new Promise((r) => setTimeout(r, 600));
       }
       setReminderSuccessNotice(
-        `✓ ${channel} reminder dispatched to ${booking.customer.fullName} for "${ms.name}" (Due: ${new Date(ms.dueDate).toLocaleDateString('en-IN')})`
+        `✓ ${channel} reminder dispatched to ${customer.fullName} for "${ms.name}" (Due: ${new Date(ms.dueDate).toLocaleDateString('en-IN')})`
       );
       setTimeout(() => setReminderSuccessNotice(null), 6000);
     } catch (err) {
@@ -220,7 +236,7 @@ export function BookingDetailsDrawer({
         await new Promise((r) => setTimeout(r, 600));
       }
       setReminderSuccessNotice(
-        `✓ ${reminderChannel} payment reminder sent to ${booking.customer.fullName} (${booking.customer.phone})!`
+        `✓ ${reminderChannel} payment reminder sent to ${customer.fullName} (${customer.phone})!`
       );
       setCustomReminderMsg('');
       setTimeout(() => setReminderSuccessNotice(null), 6000);
@@ -285,19 +301,28 @@ export function BookingDetailsDrawer({
           {/* Quick Buyer Headline Bar */}
           <div className="mt-4 pt-3 border-t border-slate-700/60 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-300">
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1 font-medium text-white">
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  navigate(`/builder/customers?leadId=${booking.leadId}`);
+                }}
+                className="flex items-center gap-1 font-semibold text-white hover:text-emerald-300 underline cursor-pointer text-left"
+                title="Click to open Customer Profile in CRM"
+              >
                 <UserCheck className="h-3.5 w-3.5 text-emerald-400" />
-                {booking.customer.fullName}
-              </span>
+                <span>{customer.fullName}</span>
+                <ExternalLink className="h-3 w-3 text-slate-300" />
+              </button>
               <span>•</span>
               <span className="flex items-center gap-1">
                 <Phone className="h-3 w-3 text-slate-400" />
-                {booking.customer.phone}
+                {customer.phone || 'No phone'}
               </span>
               <span>•</span>
               <span className="flex items-center gap-1">
                 <Mail className="h-3 w-3 text-slate-400" />
-                {booking.customer.email}
+                {customer.email || 'No email'}
               </span>
             </div>
 
@@ -664,40 +689,58 @@ export function BookingDetailsDrawer({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-4 space-y-3 text-xs">
-                    <div className="grid grid-cols-3 gap-1 py-1 border-b">
+                    <div className="grid grid-cols-3 gap-1 py-1 border-b items-center">
                       <span className="text-muted-foreground">Full Legal Name:</span>
-                      <span className="col-span-2 font-semibold text-foreground">
-                        {booking.customer.fullName}
-                      </span>
+                      <div className="col-span-2 font-semibold text-foreground flex items-center justify-between flex-wrap gap-1">
+                        <span>{customer.fullName}</span>
+                        {booking.leadId && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 text-[11px] font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1 px-2"
+                            onClick={() => {
+                              onClose();
+                              navigate(`/builder/customers?leadId=${booking.leadId}`);
+                            }}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            View Customer CRM Profile
+                          </Button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-3 gap-1 py-1 border-b">
                       <span className="text-muted-foreground">Contact Phone:</span>
                       <span className="col-span-2 font-medium text-foreground flex items-center gap-2">
-                        {booking.customer.phone}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-5 px-1.5 text-[10px] text-emerald-700 hover:bg-emerald-50"
-                          onClick={handleQuickCall}
-                        >
-                          <Phone className="h-3 w-3 mr-0.5" /> Call
-                        </Button>
+                        {customer.phone || 'No phone'}
+                        {customer.phone && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1.5 text-[10px] text-emerald-700 hover:bg-emerald-50"
+                            onClick={handleQuickCall}
+                          >
+                            <Phone className="h-3 w-3 mr-0.5" /> Call
+                          </Button>
+                        )}
                       </span>
                     </div>
 
                     <div className="grid grid-cols-3 gap-1 py-1 border-b">
                       <span className="text-muted-foreground">Email Address:</span>
                       <span className="col-span-2 font-medium text-foreground flex items-center gap-2">
-                        {booking.customer.email}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-5 px-1.5 text-[10px] text-blue-700 hover:bg-blue-50"
-                          onClick={handleQuickEmail}
-                        >
-                          <Mail className="h-3 w-3 mr-0.5" /> Email
-                        </Button>
+                        {customer.email || 'No email'}
+                        {customer.email && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-1.5 text-[10px] text-blue-700 hover:bg-blue-50"
+                            onClick={handleQuickEmail}
+                          >
+                            <Mail className="h-3 w-3 mr-0.5" /> Email
+                          </Button>
+                        )}
                       </span>
                     </div>
 
@@ -711,7 +754,7 @@ export function BookingDetailsDrawer({
                     <div className="grid grid-cols-3 gap-1 py-1">
                       <span className="text-muted-foreground">Permanent Address:</span>
                       <span className="col-span-2 font-normal text-foreground leading-relaxed">
-                        {booking.customer.permanentAddress || (matchedLead as any)?.address || matchedLead?.preferredLocation || 'Address verified on file'}
+                        {customer.permanentAddress}
                       </span>
                     </div>
                   </CardContent>
@@ -730,7 +773,7 @@ export function BookingDetailsDrawer({
                       <span className="text-muted-foreground">PAN Card Number:</span>
                       <div className="col-span-2 flex items-center gap-2">
                         <span className="font-mono font-bold text-foreground">
-                          {booking.customer.panNumber || (booking.customer as any).pan || (matchedLead as any)?.panNumber || (matchedLead as any)?.pan || 'ABCDE1234F'}
+                          {customer.panNumber}
                         </span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">
                           Verified
@@ -742,7 +785,7 @@ export function BookingDetailsDrawer({
                       <span className="text-muted-foreground">Aadhaar (Last 4):</span>
                       <div className="col-span-2 flex items-center gap-2">
                         <span className="font-mono font-bold text-foreground">
-                          •••• •••• {booking.customer.aadhaarLast4 || (matchedLead as any)?.aadhaarLast4 || '8901'}
+                          •••• •••• {customer.aadhaarLast4}
                         </span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">
                           UIDAI Linked
@@ -753,7 +796,7 @@ export function BookingDetailsDrawer({
                     <div className="grid grid-cols-3 gap-1 py-1 border-b">
                       <span className="text-muted-foreground">Co-Applicant:</span>
                       <span className="col-span-2 font-medium text-foreground">
-                        {booking.customer.coApplicantName || (matchedLead as any)?.coApplicantName || 'None registered (Sole Applicant)'}
+                        {customer.coApplicantName}
                       </span>
                     </div>
 

@@ -237,6 +237,19 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
     );
   }, [leads]);
 
+  const leadIdParam = searchParams.get('leadId');
+  React.useEffect(() => {
+    if (leadIdParam && leads.length > 0) {
+      const match = leads.find((l) => l.id === leadIdParam);
+      if (match) {
+        setSelectedLead(match);
+        if (isCustomer(match) || searchParams.get('tab') === 'customers' || location.pathname.includes('/customers')) {
+          setActiveTab('customers');
+        }
+      }
+    }
+  }, [leadIdParam, leads, location.pathname, searchParams]);
+
   React.useEffect(() => {
     setLeadActivities([]);
     if (!activeOrgId || !selectedLeadId) {
@@ -1305,7 +1318,19 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
       )}
 
       {/* Lead / Customer 360° Detail Dialog */}
-      <Dialog open={Boolean(selectedLead)} onOpenChange={(o) => !o && setSelectedLead(null)}>
+      <Dialog
+        open={Boolean(selectedLead)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setSelectedLead(null);
+            if (searchParams.has('leadId')) {
+              const next = new URLSearchParams(searchParams);
+              next.delete('leadId');
+              setSearchParams(next, { replace: true });
+            }
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-3xl">
           {selectedLead && (
             <>

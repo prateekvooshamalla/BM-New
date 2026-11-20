@@ -9,14 +9,17 @@ import {
   Calendar,
   Check,
   CheckCircle2,
+  Clock,
   CreditCard,
   Download,
   Edit,
+  ExternalLink,
   FileText,
   Filter,
   FolderPlus,
   Grid3X3,
   History,
+  KeyRound,
   Layers,
   List,
   Lock,
@@ -27,8 +30,10 @@ import {
   ShieldCheck,
   TrendingUp,
   Unlock,
+  UserCheck,
   UserPlus,
   Users,
+  Wallet,
 } from 'lucide-react';
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
@@ -692,6 +697,47 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
     [units]
   );
 
+  const inventoryStats = React.useMemo(() => {
+    const totalUnits = units.length;
+    const bookedUnits = units.filter(
+      (u) => u.status === 'BOOKED' || u.status === 'AGREEMENT' || u.status === 'REGISTERED'
+    ).length;
+    const pendingUnits = units.filter(
+      (u) => u.status === 'RESERVED' || u.status === 'ON_HOLD'
+    ).length;
+    const availableUnits = units.filter((u) => u.status === 'AVAILABLE').length;
+
+    // Distinct customer buyers linked to units or marked as customer for this project
+    const unitHeldLeadIds = new Set(
+      units.filter((u) => u.heldForLeadId && u.status !== 'AVAILABLE').map((u) => u.heldForLeadId!)
+    );
+    const buyerCustomersCount = Math.max(
+      unitHeldLeadIds.size,
+      customerLeads.filter((l) => l.isCustomer && (!currentProjectId || l.projectId === currentProjectId)).length
+    );
+
+    // Total advance collected across units
+    const totalAdvanceInr = units.reduce(
+      (acc, u) => acc + (u.holdAdvanceAmount || 0),
+      0
+    );
+
+    // Gross booked value
+    const bookedGrossValueInr = units
+      .filter((u) => u.status === 'BOOKED' || u.status === 'AGREEMENT' || u.status === 'REGISTERED')
+      .reduce((acc, u) => acc + (u.calculatedTotalPrice || 0), 0);
+
+    return {
+      totalUnits,
+      bookedUnits,
+      pendingUnits,
+      availableUnits,
+      buyerCustomersCount,
+      totalAdvanceInr,
+      bookedGrossValueInr,
+    };
+  }, [units, customerLeads, currentProjectId]);
+
   const handleCreatePhase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId || !currentProjectId) return;
@@ -1069,6 +1115,111 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
               </PermissionGate>
             } />
           )}
+          {/* Inventory Overview Stats Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Card className="bg-card hover:border-primary/40 transition-colors shadow-xs">
+              <CardContent className="p-3.5 space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  <span>Total Units</span>
+                  <Building2 className="h-4 w-4 text-primary" />
+                </div>
+                <div className="text-2xl font-bold text-foreground">
+                  {inventoryStats.totalUnits}
+                </div>
+                <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <span>{towers.length} tower(s)</span>
+                  <span>•</span>
+                  <span>{floors.length} floor(s)</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-emerald-500/5 border-emerald-500/20 hover:border-emerald-500/40 transition-colors shadow-xs">
+              <CardContent className="p-3.5 space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+                  <span>Booked &amp; Sold</span>
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                </div>
+                <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">
+                  {inventoryStats.bookedUnits}
+                </div>
+                <div className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 truncate" title={formatInr(inventoryStats.bookedGrossValueInr)}>
+                  {formatInrCompact(inventoryStats.bookedGrossValueInr)} booked
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-amber-500/5 border-amber-500/20 hover:border-amber-500/40 transition-colors shadow-xs">
+              <CardContent className="p-3.5 space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold text-amber-800 dark:text-amber-300 uppercase tracking-wider">
+                  <span>Pending / Hold</span>
+                  <Clock className="h-4 w-4 text-amber-600" />
+                </div>
+                <div className="text-2xl font-bold text-amber-700 dark:text-amber-400">
+                  {inventoryStats.pendingUnits}
+                </div>
+                <div className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
+                  Reserved &amp; 48h holds
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-sky-500/5 border-sky-500/20 hover:border-sky-500/40 transition-colors shadow-xs">
+              <CardContent className="p-3.5 space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold text-sky-800 dark:text-sky-300 uppercase tracking-wider">
+                  <span>Available</span>
+                  <Unlock className="h-4 w-4 text-sky-600" />
+                </div>
+                <div className="text-2xl font-bold text-sky-700 dark:text-sky-400">
+                  {inventoryStats.availableUnits}
+                </div>
+                <div className="text-[11px] text-sky-700/80 dark:text-sky-400/80">
+                  Ready to book
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-indigo-500/5 border-indigo-500/20 hover:border-indigo-500/40 transition-colors shadow-xs">
+              <CardContent className="p-3.5 space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold text-indigo-800 dark:text-indigo-300 uppercase tracking-wider">
+                  <span>Buyer Customers</span>
+                  <Users className="h-4 w-4 text-indigo-600" />
+                </div>
+                <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-400">
+                  {inventoryStats.buyerCustomersCount}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate('/builder/customers')}
+                  className="text-[11px] text-primary hover:underline font-medium flex items-center gap-1 text-left cursor-pointer"
+                >
+                  <span>View Customers</span>
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-emerald-500/5 border-emerald-500/20 hover:border-emerald-500/40 transition-colors shadow-xs">
+              <CardContent className="p-3.5 space-y-1">
+                <div className="flex items-center justify-between text-xs font-semibold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+                  <span>Advances Paid</span>
+                  <Wallet className="h-4 w-4 text-emerald-600" />
+                </div>
+                <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">
+                  {formatInrCompact(inventoryStats.totalAdvanceInr)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate('/builder/collections')}
+                  className="text-[11px] text-emerald-700 dark:text-emerald-300 hover:underline font-medium flex items-center gap-1 text-left cursor-pointer"
+                >
+                  <span>Collections ledger</span>
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </CardContent>
+            </Card>
+          </div>
+
           {/* Project Switcher & Hierarchy Summary */}
           <Card>
             <CardContent className="p-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1331,6 +1482,14 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                             <div className="mt-0.5 text-[10px] opacity-80">
                               {unit.facing} • {formatInrCompact(unit.calculatedTotalPrice)}
                             </div>
+                            {unit.heldForLeadId && (
+                              <div className="mt-1 text-[10px] font-semibold text-primary truncate max-w-full flex items-center gap-1">
+                                <UserCheck className="h-2.5 w-2.5 shrink-0" />
+                                <span className="truncate">
+                                  {customerLeads.find((l) => l.id === unit.heldForLeadId)?.customerName || 'Customer Linked'}
+                                </span>
+                              </div>
+                            )}
                           </button>
                         );
                       })}
@@ -1363,6 +1522,33 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                   accessorKey: 'status',
                   header: 'Status',
                   cell: ({ row }) => <StatusBadge status={row.original.status} />,
+                },
+                {
+                  id: 'customer',
+                  header: 'Allotted Customer',
+                  cell: ({ row }) => {
+                    const u = row.original;
+                    const lead = customerLeads.find((l) => l.id === u.heldForLeadId);
+                    if (!lead && !u.heldForLeadId) {
+                      return <span className="text-muted-foreground text-xs">—</span>;
+                    }
+                    return lead ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/builder/customers?leadId=${lead.id}`);
+                        }}
+                        className="text-primary hover:underline font-semibold text-xs text-left flex items-center gap-1 group cursor-pointer"
+                        title="Click to open Customer Profile in CRM"
+                      >
+                        <span>{lead.customerName}</span>
+                        <ExternalLink className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                      </button>
+                    ) : (
+                      <span className="text-xs text-foreground font-medium">Customer Linked</span>
+                    );
+                  },
                 },
                 {
                   id: 'open',
@@ -1545,9 +1731,24 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                             <div>
                               <div className="text-[10px] text-muted-foreground uppercase font-medium">Customer Full Name</div>
-                              <div className="font-bold text-foreground text-sm">
-                                {lead?.customerName || 'Allotted Buyer'}
-                              </div>
+                              {lead ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedUnit(null);
+                                    navigate(`/builder/customers?leadId=${lead.id}`);
+                                  }}
+                                  className="font-bold text-primary hover:underline text-sm flex items-center gap-1 group text-left cursor-pointer"
+                                  title="Click to open Customer Profile in CRM"
+                                >
+                                  <span>{lead.customerName}</span>
+                                  <ExternalLink className="h-3.5 w-3.5 opacity-70 group-hover:opacity-100" />
+                                </button>
+                              ) : (
+                                <div className="font-bold text-foreground text-sm">
+                                  Allotted Buyer
+                                </div>
+                              )}
                             </div>
 
                             <div>
@@ -1647,17 +1848,34 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                             </div>
                           </div>
 
-                          {/* Button to open Full Interactive Dossier Drawer */}
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="w-full h-8 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1.5 mt-1"
-                            onClick={() => setDrawerOpenForUnit(true)}
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                            Open Complete Dossier & Payment Reminders
-                          </Button>
+                          {/* Action Buttons to open Full Interactive Dossier or Customer CRM Profile */}
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            {lead && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="flex-1 h-8 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1.5"
+                                onClick={() => {
+                                  setSelectedUnit(null);
+                                  navigate(`/builder/customers?leadId=${lead.id}`);
+                                }}
+                              >
+                                <UserCheck className="h-3.5 w-3.5" />
+                                Open Customer Profile (CRM)
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="flex-1 h-8 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1.5"
+                              onClick={() => setDrawerOpenForUnit(true)}
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              Dossier &amp; Reminders
+                            </Button>
+                          </div>
                         </div>
                       );
                     })()}
