@@ -1042,6 +1042,24 @@ export type BookingStatus =
   | 'REGISTERED'
   | 'CANCELLED';
 
+export interface BookingMilestoneSchedule {
+  id: string;
+  sequence: number;
+  name: string;
+  percentage: number;
+  demandAmountInr: number;
+  paidAmountInr: number;
+  outstandingAmountInr: number;
+  dueDate: ISODateString;
+  status: 'PAID' | 'PARTIALLY_PAID' | 'DUE' | 'OVERDUE';
+  dueTrigger?: string;
+  collectionRecordId?: string | null;
+  receiptNumber?: string | null;
+  paidAt?: ISODateString | null;
+  lastReminderSentAt?: ISODateString | null;
+  reminderCount?: number;
+}
+
 export interface Booking {
   id: string;
   orgId: string;
@@ -1068,6 +1086,13 @@ export interface Booking {
   tokenAmountExpectedInr: number;
   totalCollectedVerifiedInr: number;
   outstandingBalanceInr: number;
+  advancePaidAmountInr?: number;
+  advancePaymentReference?: string | null;
+  advancePaymentMode?: string | null;
+  advancePaidAt?: ISODateString | null;
+  paymentPlanId?: string | null;
+  paymentPlanName?: string | null;
+  paymentSchedule?: BookingMilestoneSchedule[];
   status: BookingStatus;
   cancellationReason?: string;
   requestedByUid: string;

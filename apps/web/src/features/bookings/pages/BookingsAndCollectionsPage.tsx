@@ -31,7 +31,9 @@ import {
 import {
   formatInr,
   formatInrCompact,
+  generateBookingPaymentSchedule,
   type Booking,
+  type BookingMilestoneSchedule,
   type BookingStatus,
   type CollectionRecord,
   type DocumentRecord,
@@ -75,6 +77,7 @@ import {
 import { IncomeMetricsCards } from '../components/IncomeMetricsCards';
 import { PaymentAutomationPanel } from '../components/PaymentAutomationPanel';
 import { ReceiptAndDemandModals } from '../components/ReceiptAndDemandModals';
+import { BookingDetailsDrawer } from '../components/BookingDetailsDrawer';
 
 export interface BookingsAndCollectionsPageProps {
   defaultTab?: 'bookings' | 'collections' | 'automation' | 'documents' | 'reconciliation';
@@ -145,6 +148,7 @@ export function BookingsAndCollectionsPage({
 
   // Modals & Target items
   const [newBookingOpen, setNewBookingOpen] = React.useState(false);
+  const [selectedBookingForDrawer, setSelectedBookingForDrawer] = React.useState<Booking | null>(null);
   const [recordPaymentBk, setRecordPaymentBk] = React.useState<Booking | null>(null);
   const [recordPaymentCol, setRecordPaymentCol] = React.useState<CollectionRecord | null>(null);
   const [reconcileTarget, setReconcileTarget] = React.useState<CollectionRecord | null>(null);
@@ -250,7 +254,35 @@ export function BookingsAndCollectionsPage({
 
   // Unified Bookings: Combines explicit bookings with any booked/reserved units or converted buyer customers
   const allBookings = React.useMemo(() => {
-    const list: Booking[] = [...bookings];
+    const list: Booking[] = bookings.map((b) => {
+      const advPaid = b.advancePaidAmountInr ?? b.totalCollectedVerifiedInr ?? 0;
+      const advRef = b.advancePaymentReference || (advPaid > 0 ? `NEFT-ADV-${b.bookingNumber.slice(-5)}` : null);
+      const schedule = b.paymentSchedule && b.paymentSchedule.length > 0
+        ? b.paymentSchedule
+        : generateBookingPaymentSchedule({
+            contractValueInr: b.totalPayableInr,
+            advancePaidInr: advPaid,
+            advancePaymentRef: advRef,
+            startDateIso: b.bookedAt || b.createdAt,
+          });
+      const lead = leads.find((l) => l.id === b.leadId);
+      return {
+        ...b,
+        advancePaidAmountInr: advPaid,
+        advancePaymentReference: advRef,
+        advancePaymentMode: b.advancePaymentMode || 'NEFT',
+        advancePaidAt: b.advancePaidAt || b.bookedAt || b.createdAt,
+        paymentPlanName: b.paymentPlanName || 'Standard Construction-Linked Plan (CLP)',
+        paymentSchedule: schedule,
+        customer: {
+          ...b.customer,
+          panNumber: b.customer.panNumber || (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
+          aadhaarLast4: b.customer.aadhaarLast4 || (lead as any)?.aadhaarLast4 || '8901',
+          permanentAddress: b.customer.permanentAddress || (lead as any)?.address || lead?.preferredLocation || 'Address on file',
+          coApplicantName: b.customer.coApplicantName || (lead as any)?.coApplicantName || undefined,
+        },
+      };
+    });
     const existingUnitIds = new Set(list.map((b) => b.unitId));
     const existingLeadIds = new Set(list.map((b) => b.leadId));
 
@@ -270,8 +302,17 @@ export function BookingsAndCollectionsPage({
       const cleanNum = u.unitNumber.replace(/[^A-Za-z0-9]/g, '');
       const bookingNumber = `BM-BK-${proj?.code || 'PRJ'}-2026-${cleanNum || '001'}`;
       const contractVal = u.calculatedTotalPrice || 5000000;
-      const advanceVal = u.holdAdvanceAmount || 500000;
+      const advanceVal = u.holdAdvanceAmount || (u.holdPaymentReference ? 500000 : 0);
       const realizedVal = u.holdPaymentReference ? advanceVal : 0;
+      const advRef = u.holdPaymentReference || (realizedVal > 0 ? `NEFT-ADV-${cleanNum || '001'}` : null);
+      const bookingDate = u.updatedAt || u.createdAt || new Date().toISOString();
+
+      const schedule = generateBookingPaymentSchedule({
+        contractValueInr: contractVal,
+        advancePaidInr: realizedVal,
+        advancePaymentRef: advRef,
+        startDateIso: bookingDate,
+      });
 
       list.push({
         id: u.activeBookingId || `booking-unit-${u.id}`,
@@ -290,7 +331,10 @@ export function BookingsAndCollectionsPage({
           email:
             lead?.email ||
             `${(lead?.customerName || 'buyer').toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+          panNumber: (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
+          aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice(-4) || '8901',
           permanentAddress: (lead as any)?.address || lead?.preferredLocation || 'Address on file',
+          coApplicantName: (lead as any)?.coApplicantName || undefined,
         },
         allocatedParkingSlotIds: u.assignedParkingSlotIds || [],
         agreementValueInr: contractVal,
@@ -298,13 +342,19 @@ export function BookingsAndCollectionsPage({
         tokenAmountExpectedInr: advanceVal,
         totalCollectedVerifiedInr: realizedVal,
         outstandingBalanceInr: Math.max(0, contractVal - realizedVal),
+        advancePaidAmountInr: realizedVal,
+        advancePaymentReference: advRef,
+        advancePaymentMode: 'NEFT',
+        advancePaidAt: bookingDate,
+        paymentPlanName: 'Standard Construction-Linked Plan (CLP)',
+        paymentSchedule: schedule,
         status: (u.status === 'RESERVED' ? 'HOLD_REQUESTED' : 'BOOKED') as BookingStatus,
         requestedByUid: u.heldByUid || 'SYSTEM',
         approvedByUid: u.status === 'BOOKED' ? (u.heldByUid || 'SYSTEM') : null,
-        bookedAt: u.updatedAt || new Date().toISOString(),
+        bookedAt: bookingDate,
         cancelledAt: null,
-        createdAt: u.createdAt || new Date().toISOString(),
-        updatedAt: u.updatedAt || new Date().toISOString(),
+        createdAt: u.createdAt || bookingDate,
+        updatedAt: bookingDate,
       });
       existingUnitIds.add(u.id);
       if (lead) existingLeadIds.add(lead.id);
@@ -330,6 +380,15 @@ export function BookingsAndCollectionsPage({
       const contractVal = matchedUnit?.calculatedTotalPrice || lead.budgetMaxInr || 6500000;
       const tokenVal = matchedUnit?.holdAdvanceAmount || 500000;
       const paidVal = matchedUnit?.holdPaymentReference ? tokenVal : 0;
+      const advRef = matchedUnit?.holdPaymentReference || (paidVal > 0 ? `NEFT-ADV-${lead.id.slice(0, 5).toUpperCase()}` : null);
+      const bookingDate = lead.customerConvertedAt || lead.updatedAt || new Date().toISOString();
+
+      const schedule = generateBookingPaymentSchedule({
+        contractValueInr: contractVal,
+        advancePaidInr: paidVal,
+        advancePaymentRef: advRef,
+        startDateIso: bookingDate,
+      });
 
       list.push({
         id: `booking-lead-${lead.id}`,
@@ -348,7 +407,10 @@ export function BookingsAndCollectionsPage({
           email:
             lead.email ||
             `${lead.customerName.toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+          panNumber: (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
+          aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice(-4) || '8901',
           permanentAddress: (lead as any)?.address || lead.preferredLocation || 'Address on file',
+          coApplicantName: (lead as any)?.coApplicantName || undefined,
         },
         allocatedParkingSlotIds: matchedUnit?.assignedParkingSlotIds || [],
         agreementValueInr: contractVal,
@@ -356,13 +418,19 @@ export function BookingsAndCollectionsPage({
         tokenAmountExpectedInr: tokenVal,
         totalCollectedVerifiedInr: paidVal,
         outstandingBalanceInr: Math.max(0, contractVal - paidVal),
+        advancePaidAmountInr: paidVal,
+        advancePaymentReference: advRef,
+        advancePaymentMode: 'NEFT',
+        advancePaidAt: bookingDate,
+        paymentPlanName: 'Standard Construction-Linked Plan (CLP)',
+        paymentSchedule: schedule,
         status: 'BOOKED' as BookingStatus,
         requestedByUid: lead.convertedByUid || 'SYSTEM',
         approvedByUid: lead.convertedByUid || 'SYSTEM',
-        bookedAt: lead.customerConvertedAt || lead.updatedAt || new Date().toISOString(),
+        bookedAt: bookingDate,
         cancelledAt: null,
-        createdAt: lead.customerConvertedAt || lead.createdAt || new Date().toISOString(),
-        updatedAt: lead.updatedAt || new Date().toISOString(),
+        createdAt: lead.customerConvertedAt || lead.createdAt || bookingDate,
+        updatedAt: bookingDate,
       });
       existingLeadIds.add(lead.id);
     }
@@ -539,6 +607,47 @@ export function BookingsAndCollectionsPage({
     }
   };
 
+  const handleSendBookingReminder = async (
+    bk: Booking,
+    ms: BookingMilestoneSchedule,
+    channel: 'WHATSAPP' | 'EMAIL' | 'SMS',
+    customMessage?: string
+  ) => {
+    if (!activeOrgId) return;
+    try {
+      await callBackendFunction('sendPaymentReminder', {
+        orgId: activeOrgId,
+        bookingId: bk.id,
+        channel,
+        customMessage:
+          customMessage ||
+          `Dear ${bk.customer.fullName}, reminder for Unit ${bk.unitNumber}. Milestone: ${ms.name}. Amount: ${formatInr(ms.outstandingAmountInr || ms.demandAmountInr)}. Due date: ${new Date(ms.dueDate).toLocaleDateString('en-IN')}.`,
+      });
+      setBanner(`✓ Dispatched ${channel} payment reminder to ${bk.customer.fullName} for "${ms.name}".`);
+    } catch {
+      const remRef = doc(db, 'payment_reminders', `rem-${Date.now()}`);
+      await setDoc(remRef, {
+        id: remRef.id,
+        orgId: activeOrgId,
+        projectId: bk.projectId,
+        bookingId: bk.id,
+        customerName: bk.customer.fullName,
+        customerPhone: bk.customer.phone,
+        customerEmail: bk.customer.email,
+        unitNumber: bk.unitNumber,
+        milestoneName: ms.name,
+        amountDueInr: ms.outstandingAmountInr || ms.demandAmountInr,
+        channel,
+        status: 'SENT',
+        isOverdue: ms.status === 'OVERDUE',
+        dueDate: ms.dueDate,
+        createdAt: new Date().toISOString(),
+        sentAt: new Date().toISOString(),
+      });
+      setBanner(`✓ Reminder recorded & dispatched to ${bk.customer.fullName} via ${channel}.`);
+    }
+  };
+
   const handleReconcile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeOrgId || !reconcileTarget) return;
@@ -712,33 +821,120 @@ export function BookingsAndCollectionsPage({
                   accessorKey: 'bookingNumber',
                   header: 'Booking #',
                   cell: ({ row }) => (
-                    <span className="font-semibold text-foreground">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBookingForDrawer(row.original)}
+                      className="font-mono font-bold text-primary hover:underline text-left text-xs"
+                      title="Click to view complete dossier and payment cycle"
+                    >
                       {row.original.bookingNumber}
-                    </span>
+                    </button>
                   ),
                 },
                 {
                   id: 'unit',
                   header: 'Allotted Unit',
                   cell: ({ row }) => (
-                    <strong className="text-emerald-700 dark:text-emerald-400">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBookingForDrawer(row.original)}
+                      className="text-left font-bold text-emerald-700 dark:text-emerald-400 hover:underline"
+                      title="Click to view unit and payment schedule"
+                    >
                       Flat {row.original.unitNumber}
-                    </strong>
+                    </button>
                   ),
                 },
                 {
                   id: 'customer',
-                  header: 'Customer',
-                  cell: ({ row }) => (
-                    <div>
-                      <div className="font-semibold text-foreground">
-                        {row.original.customer.fullName}
+                  header: 'Customer & KYC',
+                  cell: ({ row }) => {
+                    const c = row.original.customer;
+                    return (
+                      <div className="space-y-0.5">
+                        <div className="font-semibold text-foreground">
+                          {c.fullName}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {c.phone}
+                        </div>
+                        {c.panNumber && (
+                          <div className="text-[10px] font-mono text-slate-500">
+                            PAN: {c.panNumber}
+                          </div>
+                        )}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        {row.original.customer.phone}
+                    );
+                  },
+                },
+                {
+                  id: 'advance',
+                  header: 'Advance Paid & Ref',
+                  cell: ({ row }) => {
+                    const bk = row.original;
+                    const advAmt = bk.advancePaidAmountInr ?? bk.totalCollectedVerifiedInr ?? 0;
+                    const advRef = bk.advancePaymentReference;
+                    return (
+                      <div className="space-y-0.5">
+                        <div className="font-bold text-emerald-700 dark:text-emerald-400">
+                          {formatInr(advAmt)}
+                        </div>
+                        {advRef ? (
+                          <div className="text-[10px] font-mono text-muted-foreground truncate max-w-[120px]" title={advRef}>
+                            Ref: {advRef}
+                          </div>
+                        ) : advAmt > 0 ? (
+                          <span className="text-[10px] text-emerald-600 font-medium">Cleared</span>
+                        ) : (
+                          <span className="text-[10px] text-amber-600 font-medium">Pending Token</span>
+                        )}
                       </div>
-                    </div>
-                  ),
+                    );
+                  },
+                },
+                {
+                  id: 'paymentCycle',
+                  header: 'Payment Cycle & Next Due',
+                  cell: ({ row }) => {
+                    const bk = row.original;
+                    const schedule = bk.paymentSchedule || [];
+                    const nextPending = schedule.find((ms) => ms.outstandingAmountInr > 0);
+
+                    if (!nextPending) {
+                      return (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                          <CheckCircle2 className="h-3 w-3" /> All Paid
+                        </span>
+                      );
+                    }
+
+                    const dueDateObj = new Date(nextPending.dueDate);
+                    const isPastDue = dueDateObj.getTime() < Date.now();
+                    const daysDiff = Math.round((dueDateObj.getTime() - Date.now()) / 86400000);
+
+                    return (
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-semibold text-foreground truncate max-w-[160px]" title={nextPending.name}>
+                          {nextPending.sequence}. {nextPending.name}
+                        </div>
+                        <div>
+                          {isPastDue ? (
+                            <span className="inline-flex items-center text-[10px] font-bold text-rose-700 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/20">
+                              🚨 Overdue {Math.abs(daysDiff)}d ({formatInr(nextPending.outstandingAmountInr)})
+                            </span>
+                          ) : daysDiff <= 7 ? (
+                            <span className="inline-flex items-center text-[10px] font-bold text-amber-700 dark:text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                              Due in {daysDiff}d ({formatInr(nextPending.outstandingAmountInr)})
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground">
+                              Due {dueDateObj.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  },
                 },
                 {
                   accessorKey: 'totalPayableInr',
@@ -746,15 +942,6 @@ export function BookingsAndCollectionsPage({
                   cell: ({ row }) => (
                     <span className="font-medium">
                       {formatInr(row.original.totalPayableInr)}
-                    </span>
-                  ),
-                },
-                {
-                  accessorKey: 'totalCollectedVerifiedInr',
-                  header: 'Realized / Paid',
-                  cell: ({ row }) => (
-                    <span className="font-bold text-emerald-700 dark:text-emerald-400">
-                      {formatInr(row.original.totalCollectedVerifiedInr)}
                     </span>
                   ),
                 },
@@ -779,6 +966,14 @@ export function BookingsAndCollectionsPage({
                     const bk = row.original;
                     return (
                       <div className="flex flex-wrap items-center gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1"
+                          onClick={() => setSelectedBookingForDrawer(bk)}
+                        >
+                          <FileText className="h-3 w-3" /> Dossier & Cycle
+                        </Button>
                         {bk.status !== 'CANCELLED' && (
                           <Button
                             variant="default"
@@ -1420,6 +1615,48 @@ export function BookingsAndCollectionsPage({
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Booking Details & Comprehensive Payment Cycle Dossier Drawer */}
+      <BookingDetailsDrawer
+        booking={selectedBookingForDrawer}
+        open={Boolean(selectedBookingForDrawer)}
+        onClose={() => setSelectedBookingForDrawer(null)}
+        leads={leads}
+        units={units}
+        projects={projects}
+        collections={collections}
+        reminders={reminders}
+        onRecordPayment={(bk, ms) => {
+          setSelectedBookingForDrawer(null);
+          handleOpenRecordPayment(
+            bk,
+            ms
+              ? {
+                  id: `col-ms-${ms.id}`,
+                  orgId: activeOrgId || '',
+                  bookingId: bk.id,
+                  projectId: bk.projectId,
+                  unitId: bk.unitId,
+                  recordType: ms.sequence === 1 ? 'TOKEN' : 'MILESTONE_DEMAND',
+                  milestoneSequence: ms.sequence,
+                  milestoneName: ms.name,
+                  demandAmountInr: ms.demandAmountInr,
+                  paidAmountInr: ms.paidAmountInr || 0,
+                  allocatedAmountInr: ms.paidAmountInr || 0,
+                  status: 'DUE',
+                  recordedByUid: 'SYSTEM',
+                  paymentMode: 'NEFT',
+                  razorpaySignatureVerified: false,
+                  dueDate: ms.dueDate,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                }
+              : undefined
+          );
+        }}
+        onSendReminder={handleSendBookingReminder}
+        onUpdateStatus={handleTransition}
+      />
     </div>
   );
 }

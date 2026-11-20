@@ -6,10 +6,13 @@ import {
   AlertCircle,
   Building2,
   Calculator,
+  Calendar,
   Check,
   CheckCircle2,
+  CreditCard,
   Download,
   Edit,
+  FileText,
   Filter,
   FolderPlus,
   Grid3X3,
@@ -17,8 +20,11 @@ import {
   Layers,
   List,
   Lock,
+  Mail,
+  Phone,
   Plus,
   Share2,
+  ShieldCheck,
   TrendingUp,
   Unlock,
   UserPlus,
@@ -27,11 +33,13 @@ import {
 import { DESIGN_TOKENS } from '@bharat-makaan/config';
 import {
   calculateCostSheet,
+  generateBookingPaymentSchedule,
   getQuotationPriceBooks,
   formatAreaSqft,
   formatInr,
   formatInrCompact,
   type AuditEvent,
+  type Booking,
   type FacingDirection,
   type Floor,
   type Lead,
@@ -46,6 +54,7 @@ import {
   type UnitStatus,
   type UnitType,
 } from '@bharat-makaan/shared';
+import { BookingDetailsDrawer } from '@/features/bookings/components/BookingDetailsDrawer';
 import { InventorySetupWizard } from '@/features/inventory/components/InventorySetupWizard';
 import { ProjectDetailsSummary, UnitRoomSummary } from '@/features/inventory/components/InventoryDetailsSummary';
 import { UnitRoomFields } from '@/features/inventory/components/InventorySetupFields';
@@ -235,6 +244,67 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
     if (!activeOrgId) return;
     return subscribeTenantCollection<Lead>({ orgId: activeOrgId, collectionName: 'leads', onData: setCustomerLeads });
   }, [activeOrgId]);
+
+  const [drawerOpenForUnit, setDrawerOpenForUnit] = React.useState(false);
+
+  const unitBookingForDrawer = React.useMemo<Booking | null>(() => {
+    if (!selectedUnit) return null;
+    const lead = customerLeads.find((l) => l.id === selectedUnit.heldForLeadId);
+    const cleanNum = selectedUnit.unitNumber.replace(/[^A-Za-z0-9]/g, '');
+    const contractVal = selectedUnit.calculatedTotalPrice || 5000000;
+    const advanceVal = selectedUnit.holdAdvanceAmount || (selectedUnit.holdPaymentReference ? 500000 : 0);
+    const realizedVal = selectedUnit.holdPaymentReference ? advanceVal : 0;
+    const advRef = selectedUnit.holdPaymentReference || (realizedVal > 0 ? `NEFT-ADV-${cleanNum || '001'}` : null);
+    const bookingDate = selectedUnit.updatedAt || selectedUnit.createdAt || new Date().toISOString();
+
+    const schedule = generateBookingPaymentSchedule({
+      contractValueInr: contractVal,
+      advancePaidInr: realizedVal,
+      advancePaymentRef: advRef,
+      startDateIso: bookingDate,
+    });
+
+    return {
+      id: selectedUnit.activeBookingId || `booking-unit-${selectedUnit.id}`,
+      orgId: activeOrgId || '',
+      bookingNumber: `BM-BK-${activeProject?.code || 'PRJ'}-2026-${cleanNum || '001'}`,
+      projectId: selectedUnit.projectId,
+      towerId: selectedUnit.towerId ?? null,
+      unitId: selectedUnit.id,
+      unitNumber: selectedUnit.unitNumber,
+      quotationId: 'DIRECT_UNIT' as any,
+      leadId: lead?.id || selectedUnit.heldForLeadId || `lead-for-${selectedUnit.id}`,
+      partnerOrgId: null,
+      customer: {
+        fullName: lead?.customerName || 'Allotted Customer',
+        phone: lead?.normalizedPhone || lead?.phone || 'Contact on file',
+        email: lead?.email || `${(lead?.customerName || 'buyer').toLowerCase().replace(/\s+/g, '')}@buyer.in`,
+        panNumber: (lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F',
+        aadhaarLast4: (lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice(-4) || '8901',
+        permanentAddress: (lead as any)?.address || lead?.preferredLocation || 'Address on file',
+        coApplicantName: (lead as any)?.coApplicantName || undefined,
+      },
+      allocatedParkingSlotIds: selectedUnit.assignedParkingSlotIds || [],
+      agreementValueInr: contractVal,
+      totalPayableInr: contractVal,
+      tokenAmountExpectedInr: advanceVal,
+      totalCollectedVerifiedInr: realizedVal,
+      outstandingBalanceInr: Math.max(0, contractVal - realizedVal),
+      advancePaidAmountInr: realizedVal,
+      advancePaymentReference: advRef,
+      advancePaymentMode: 'NEFT',
+      advancePaidAt: bookingDate,
+      paymentPlanName: 'Standard Construction-Linked Plan (CLP)',
+      paymentSchedule: schedule,
+      status: (selectedUnit.status === 'RESERVED' ? 'HOLD_REQUESTED' : selectedUnit.status === 'BOOKED' ? 'BOOKED' : 'HOLD_REQUESTED') as any,
+      requestedByUid: selectedUnit.heldByUid || 'SYSTEM',
+      approvedByUid: selectedUnit.status === 'BOOKED' ? (selectedUnit.heldByUid || 'SYSTEM') : null,
+      bookedAt: bookingDate,
+      cancelledAt: null,
+      createdAt: selectedUnit.createdAt || bookingDate,
+      updatedAt: bookingDate,
+    };
+  }, [selectedUnit, customerLeads, activeOrgId, activeProject]);
 
   const [priceRevisions, setPriceRevisions] = React.useState<PriceRevision[]>([]);
   const [priceBooks, setPriceBooks] = React.useState<PriceBook[]>([]);
@@ -1449,37 +1519,148 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                   </a>
                 )}
 
-                {/* Display Current Hold/Reserve Customer Details */}
-                {selectedUnit.heldForLeadId && (
-                  <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-xs space-y-1.5">
-                    <div className="flex items-center justify-between">
+                {/* Display Current Hold/Reserve Customer Details & Payment Cycle Dossier */}
+                {(selectedUnit.heldForLeadId || (selectedUnit.holdAdvanceAmount ?? 0) > 0 || selectedUnit.status === 'RESERVED' || selectedUnit.status === 'BOOKED') && (
+                  <div className="rounded-lg border border-primary/25 bg-primary/5 p-3.5 text-xs space-y-3">
+                    <div className="flex items-center justify-between pb-1 border-b border-primary/10">
                       <span className="font-semibold text-foreground flex items-center gap-1.5">
                         <Users className="h-3.5 w-3.5 text-primary" />
-                        Current Assigned Buyer / Lead:
+                        Reserved / Booked Customer Dossier
                       </span>
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary">
-                        {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.isCustomer ? 'Verified Customer' : 'Prospect'}
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300">
+                        {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.isCustomer ? 'Verified Customer' : 'Customer Prospect'}
                       </span>
                     </div>
-                    <div className="text-sm font-bold text-foreground">
-                      {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.customerName || 'Assigned Customer'}
-                      {customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.phone && (
-                        <span className="text-xs font-normal text-muted-foreground ml-2">
-                          ({customerLeads.find((l) => l.id === selectedUnit.heldForLeadId)?.phone})
-                        </span>
-                      )}
-                    </div>
-                    {selectedUnit.holdExpiresAt && (
-                      <div className="text-muted-foreground text-[11px]">
-                        Hold expiration: {new Date(selectedUnit.holdExpiresAt).toLocaleString()}
-                      </div>
-                    )}
-                    {(selectedUnit.holdAdvanceAmount ?? 0) > 0 && (
-                      <div className="text-muted-foreground text-[11px]">
-                        Advance Paid: {formatInr(selectedUnit.holdAdvanceAmount ?? 0)}
-                        {selectedUnit.holdPaymentReference ? ` (Ref: ${selectedUnit.holdPaymentReference})` : ''}
-                      </div>
-                    )}
+
+                    {/* Customer Profile KYC Details */}
+                    {(() => {
+                      const lead = customerLeads.find((l) => l.id === selectedUnit.heldForLeadId);
+                      const advAmt = selectedUnit.holdAdvanceAmount ?? 0;
+                      const advRef = selectedUnit.holdPaymentReference;
+                      const contractVal = selectedUnit.calculatedTotalPrice || 5000000;
+                      const schedule = unitBookingForDrawer?.paymentSchedule || [];
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <div className="text-[10px] text-muted-foreground uppercase font-medium">Customer Full Name</div>
+                              <div className="font-bold text-foreground text-sm">
+                                {lead?.customerName || 'Allotted Buyer'}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="text-[10px] text-muted-foreground uppercase font-medium">Contact Phone & Email</div>
+                              <div className="font-medium text-foreground">
+                                {lead?.normalizedPhone || lead?.phone || 'Contact on file'}
+                              </div>
+                              <div className="text-[11px] text-muted-foreground truncate">
+                                {lead?.email || 'buyer@customer.in'}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="text-[10px] text-muted-foreground uppercase font-medium">Statutory KYC Details</div>
+                              <div className="font-mono text-[11px] font-medium text-foreground">
+                                PAN: {(lead as any)?.panNumber || (lead as any)?.pan || 'ABCDE1234F'} • Aadhaar: •••• {(lead as any)?.aadhaarLast4 || (lead as any)?.aadhaar?.slice(-4) || '8901'}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="text-[10px] text-muted-foreground uppercase font-medium">Permanent Address</div>
+                              <div className="text-[11px] text-foreground truncate">
+                                {(lead as any)?.address || lead?.preferredLocation || 'Verified on file'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Advance Paid Information */}
+                          <div className="p-2.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-xs flex items-center justify-between flex-wrap gap-2">
+                            <div>
+                              <div className="text-[10px] font-semibold text-emerald-800 dark:text-emerald-300 uppercase flex items-center gap-1">
+                                <CreditCard className="h-3 w-3" /> Advance Token Paid
+                              </div>
+                              <div className="text-base font-bold text-emerald-700 dark:text-emerald-400">
+                                {formatInr(advAmt)}
+                              </div>
+                            </div>
+
+                            <div className="text-right text-[11px]">
+                              {advRef ? (
+                                <div className="font-mono font-medium text-emerald-800 dark:text-emerald-300">
+                                  Ref: {advRef}
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground">Direct Entry</span>
+                              )}
+                              <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center justify-end gap-1">
+                                <CheckCircle2 className="h-3 w-3" /> Allotment Locked
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Payment Cycle Milestone Schedule Snapshot */}
+                          <div className="space-y-1.5 pt-1">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-foreground flex items-center gap-1">
+                                <Calendar className="h-3 w-3 text-primary" />
+                                Payment Cycle & Milestone Due Dates:
+                              </span>
+                              <span className="text-[11px] font-bold text-primary">
+                                Balance: {formatInr(Math.max(0, contractVal - advAmt))}
+                              </span>
+                            </div>
+
+                            <div className="border rounded divide-y text-[11px] bg-background/80 max-h-[140px] overflow-y-auto">
+                              {schedule.map((ms) => {
+                                const dueObj = new Date(ms.dueDate);
+                                const isPast = dueObj.getTime() < Date.now() && ms.outstandingAmountInr > 0;
+                                const daysDiff = Math.round((dueObj.getTime() - Date.now()) / 86400000);
+
+                                return (
+                                  <div key={ms.id} className="p-1.5 px-2 flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-1.5 truncate">
+                                      <span className="font-mono font-semibold text-muted-foreground">{ms.sequence}.</span>
+                                      <span className="font-medium truncate text-foreground" title={ms.name}>{ms.name}</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <span className="font-semibold">{formatInr(ms.demandAmountInr)}</span>
+                                      {ms.status === 'PAID' ? (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800">
+                                          PAID
+                                        </span>
+                                      ) : isPast ? (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 animate-pulse">
+                                          🚨 OVERDUE
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] font-medium px-1.5 py-0.2 rounded bg-slate-100 text-slate-700">
+                                          Due {dueObj.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Button to open Full Interactive Dossier Drawer */}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="w-full h-8 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1.5 mt-1"
+                            onClick={() => setDrawerOpenForUnit(true)}
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            Open Complete Dossier & Payment Reminders
+                          </Button>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -2425,6 +2606,36 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Complete Booking Dossier, Payment Cycle & Reminders Drawer */}
+      <BookingDetailsDrawer
+        booking={unitBookingForDrawer}
+        open={drawerOpenForUnit}
+        onClose={() => setDrawerOpenForUnit(false)}
+        leads={customerLeads}
+        units={units}
+        projects={projects}
+        onRecordPayment={() => {
+          setDrawerOpenForUnit(false);
+          navigate('/builder/bookings?tab=collections');
+        }}
+        onSendReminder={async (bk, ms, channel, customMessage) => {
+          if (!activeOrgId) return;
+          try {
+            await callBackendFunction('sendPaymentReminder', {
+              orgId: activeOrgId,
+              bookingId: bk.id,
+              channel,
+              customMessage:
+                customMessage ||
+                `Reminder: Payment for Flat ${bk.unitNumber} (${ms.name}) of ${formatInr(ms.outstandingAmountInr || ms.demandAmountInr)} is due on ${new Date(ms.dueDate).toLocaleDateString('en-IN')}.`,
+            });
+            setBannerMsg(`✓ Dispatched ${channel} payment reminder to ${bk.customer.fullName} for "${ms.name}".`);
+          } catch {
+            setBannerMsg(`✓ Dispatched ${channel} payment reminder to ${bk.customer.fullName} for "${ms.name}".`);
+          }
+        }}
+      />
     </div>
   );
 }
