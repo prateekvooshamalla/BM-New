@@ -11,6 +11,7 @@ import {
   List,
   MessageSquare,
   Plus,
+  ReceiptIndianRupee,
   Search,
   Sparkles,
   Star,
@@ -1251,6 +1252,16 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
                         <Button
                           variant="outline"
                           size="sm"
+                          className="h-7 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 gap-1"
+                          onClick={() => navigate('/builder/bookings?tab=bookings')}
+                          title="View booked payments, advance and payment cycle"
+                        >
+                          <ReceiptIndianRupee className="h-3 w-3" />
+                          Payments & Cycle
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
                           className="h-7 text-xs"
                           onClick={() => {
                             setStageError(null);
@@ -1373,6 +1384,18 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
                               <span className="text-muted-foreground">Project:</span> {proj.name}
                             </div>
                           ) : null}
+                          <div className="col-span-2 pt-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="w-full h-7 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 gap-1.5"
+                              onClick={() => navigate('/builder/bookings?tab=bookings')}
+                            >
+                              <ReceiptIndianRupee className="h-3.5 w-3.5" />
+                              View Complete Booking Dossier, Payments & Milestones
+                            </Button>
+                          </div>
                         </div>
                       ) : (
                         <div className="text-muted-foreground pt-1">
