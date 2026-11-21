@@ -5,7 +5,7 @@ import {
   where,
   type QueryConstraint,
 } from 'firebase/firestore';
-import { callBackendFunction, db } from '@/lib/firebase';
+import { auth, callBackendFunction, db } from '@/lib/firebase';
 
 export interface SubscribeTenantCollectionOptions<T> {
   orgId: string;
@@ -38,6 +38,14 @@ export function subscribeTenantCollection<T = Record<string, unknown>>(
 
   let disposed = false;
 
+  const trimmedOrgId = typeof orgId === 'string' ? orgId.trim() : '';
+  if (!trimmedOrgId) {
+    onData([]);
+    return () => {
+      disposed = true;
+    };
+  }
+
   const applyTransform = (raw: T[]) => {
     if (disposed) return;
     let next = filter ? raw.filter(filter) : [...raw];
@@ -47,9 +55,9 @@ export function subscribeTenantCollection<T = Record<string, unknown>>(
     onData(next);
   };
 
-  const constraints: QueryConstraint[] = [where('orgId', '==', orgId)];
-  if (projectId) {
-    constraints.push(where('projectId', '==', projectId));
+  const constraints: QueryConstraint[] = [where('orgId', '==', trimmedOrgId)];
+  if (projectId && typeof projectId === 'string' && projectId.trim()) {
+    constraints.push(where('projectId', '==', projectId.trim()));
   }
   constraints.push(...extraConstraints);
 
@@ -63,14 +71,15 @@ export function subscribeTenantCollection<T = Record<string, unknown>>(
     },
     async () => {
       if (disposed) return;
+      if (!auth.currentUser || !trimmedOrgId) return;
       try {
         const res = await callBackendFunction<
           { orgId: string; collectionName: string; projectId?: string | null },
           { items: T[] }
         >('getOrganizationCollectionSnapshot', {
-          orgId,
-          collectionName,
-          projectId: projectId ?? null,
+          orgId: trimmedOrgId,
+          collectionName: collectionName.trim(),
+          projectId: projectId && typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null,
         });
         applyTransform(res.items ?? []);
       } catch {

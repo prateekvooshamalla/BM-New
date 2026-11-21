@@ -113,14 +113,25 @@ export function BookingDetailsDrawer({
   const [isSubmittingReminder, setIsSubmittingReminder] = React.useState(false);
   const navigate = useNavigate();
 
-  if (!booking) return null;
+  const project = booking ? projects.find((p) => p.id === booking.projectId) : undefined;
+  const matchedUnit = booking
+    ? units.find((u) => u.id === booking.unitId || u.unitNumber === booking.unitNumber)
+    : undefined;
+  const matchedLead = booking ? leads.find((l) => l.id === booking.leadId) : undefined;
 
-  const project = projects.find((p) => p.id === booking.projectId);
-  const matchedUnit = units.find((u) => u.id === booking.unitId || u.unitNumber === booking.unitNumber);
-  const matchedLead = leads.find((l) => l.id === booking.leadId);
-
-  // Safe Customer Profile fallback
+  // Safe Customer Profile fallback - hook called unconditionally
   const customer = React.useMemo(() => {
+    if (!booking) {
+      return {
+        fullName: 'Allotted Customer',
+        phone: '',
+        email: 'buyer@customer.in',
+        panNumber: 'ABCDE1234F',
+        aadhaarLast4: '8901',
+        permanentAddress: 'Address on file',
+        coApplicantName: 'None registered (Sole Applicant)',
+      };
+    }
     const c = booking.customer || ({} as any);
     return {
       fullName: c.fullName || matchedLead?.customerName || 'Allotted Customer',
@@ -131,29 +142,30 @@ export function BookingDetailsDrawer({
       permanentAddress: c.permanentAddress || (matchedLead as any)?.address || matchedLead?.preferredLocation || 'Address on file',
       coApplicantName: c.coApplicantName || (matchedLead as any)?.coApplicantName || 'None registered (Sole Applicant)',
     };
-  }, [booking.customer, matchedLead]);
+  }, [booking, matchedLead]);
 
-  // Derive advance paid and payment details
-  const advancePaidInr =
-    booking.advancePaidAmountInr ??
-    (booking.totalCollectedVerifiedInr > 0
-      ? booking.totalCollectedVerifiedInr
-      : booking.tokenAmountExpectedInr || 0);
+  // Derive advance paid and payment details safely
+  const advancePaidInr = booking
+    ? (booking.advancePaidAmountInr ??
+      (booking.totalCollectedVerifiedInr > 0
+        ? booking.totalCollectedVerifiedInr
+        : booking.tokenAmountExpectedInr || 0))
+    : 0;
 
-  const advancePaymentRef =
-    booking.advancePaymentReference ||
-    (matchedUnit?.holdPaymentReference ?? null);
+  const advancePaymentRef = booking
+    ? (booking.advancePaymentReference || (matchedUnit?.holdPaymentReference ?? null))
+    : null;
 
-  const advancePaymentMode =
-    booking.advancePaymentMode || 'NEFT';
+  const advancePaymentMode = booking?.advancePaymentMode || 'NEFT';
 
   const advancePaidAt =
-    booking.advancePaidAt ||
-    booking.bookedAt ||
-    booking.createdAt;
+    booking?.advancePaidAt ||
+    booking?.bookedAt ||
+    booking?.createdAt;
 
-  // Build or retrieve payment schedule
+  // Build or retrieve payment schedule - hook called unconditionally
   const paymentSchedule: BookingMilestoneSchedule[] = React.useMemo(() => {
+    if (!booking) return [];
     if (booking.paymentSchedule && booking.paymentSchedule.length > 0) {
       return booking.paymentSchedule;
     }
@@ -164,6 +176,9 @@ export function BookingDetailsDrawer({
       startDateIso: booking.bookedAt || booking.createdAt,
     });
   }, [booking, advancePaidInr, advancePaymentRef]);
+
+  // Early return ONLY after all hooks are evaluated
+  if (!booking) return null;
 
   // Aggregate metrics
   const totalDemandInr = paymentSchedule.reduce((acc, ms) => acc + ms.demandAmountInr, 0);
