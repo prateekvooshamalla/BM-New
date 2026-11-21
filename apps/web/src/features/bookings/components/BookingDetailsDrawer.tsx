@@ -13,7 +13,9 @@ import {
   Download,
   ExternalLink,
   FileCheck,
+  FileSpreadsheet,
   FileText,
+  List,
   Mail,
   MapPin,
   MessageSquare,
@@ -102,6 +104,7 @@ export function BookingDetailsDrawer({
   onUpdateStatus,
 }: BookingDetailsDrawerProps) {
   const [activeTab, setActiveTab] = React.useState<'schedule' | 'kyc' | 'commercials' | 'reminders'>('schedule');
+  const [scheduleViewMode, setScheduleViewMode] = React.useState<'list' | 'table'>('list');
   const [sendingReminderForMsId, setSendingReminderForMsId] = React.useState<string | null>(null);
   const [reminderSuccessNotice, setReminderSuccessNotice] = React.useState<string | null>(null);
   const [reminderChannel, setReminderChannel] = React.useState<'WHATSAPP' | 'EMAIL' | 'SMS'>('WHATSAPP');
@@ -276,7 +279,22 @@ export function BookingDetailsDrawer({
               </h2>
             </div>
 
-            <div className="flex items-center gap-2 self-start sm:self-center">
+            <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
+              {booking.leadId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs bg-indigo-600/90 hover:bg-indigo-600 text-white border-indigo-400 gap-1.5 font-semibold"
+                  onClick={() => {
+                    onClose();
+                    navigate(`/builder/customers/${booking.leadId}`);
+                  }}
+                  title="Open dedicated Customer 360° Page"
+                >
+                  <UserCheck className="h-3.5 w-3.5" />
+                  Customer 360°
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -305,7 +323,7 @@ export function BookingDetailsDrawer({
                 type="button"
                 onClick={() => {
                   onClose();
-                  navigate(`/builder/customers?leadId=${booking.leadId}`);
+                  navigate(`/builder/customers/${booking.leadId}`);
                 }}
                 className="flex items-center gap-1 font-semibold text-white hover:text-emerald-300 underline cursor-pointer text-left"
                 title="Click to open Customer Profile in CRM"
@@ -490,15 +508,37 @@ export function BookingDetailsDrawer({
             <TabsContent value="schedule" className="space-y-4">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
-                  <h3 className="text-sm font-semibold text-foreground">
-                    Construction-Linked Payment Milestone Schedule
+                  <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+                    <CreditCard className="h-4 w-4 text-primary" />
+                    Customer Payments &amp; Payment Cycle
                   </h3>
                   <p className="text-xs text-muted-foreground">
-                    Sequenced demand dates, installment amounts, and automated overdue tracking.
+                    Sequenced demands, pending installments countdown, and cleared payment receipts.
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
+                    <Button
+                      variant={scheduleViewMode === 'list' ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 text-xs font-semibold px-2.5 gap-1.5"
+                      onClick={() => setScheduleViewMode('list')}
+                    >
+                      <List className="h-3.5 w-3.5" />
+                      List View (Payments &amp; Pendings)
+                    </Button>
+                    <Button
+                      variant={scheduleViewMode === 'table' ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-7 text-xs font-semibold px-2.5 gap-1.5"
+                      onClick={() => setScheduleViewMode('table')}
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                      Milestones Table
+                    </Button>
+                  </div>
+
                   <Button
                     size="sm"
                     className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5"
@@ -510,149 +550,340 @@ export function BookingDetailsDrawer({
                 </div>
               </div>
 
-              {/* Milestones Table */}
-              <div className="border rounded-lg overflow-hidden bg-card">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b">
-                      <tr>
-                        <th className="py-2.5 px-3">#</th>
-                        <th className="py-2.5 px-3">Milestone Stage & Trigger</th>
-                        <th className="py-2.5 px-3 text-center">% Share</th>
-                        <th className="py-2.5 px-3 text-right">Demand Amount</th>
-                        <th className="py-2.5 px-3 text-right">Paid Amount</th>
-                        <th className="py-2.5 px-3 text-right">Balance Due</th>
-                        <th className="py-2.5 px-3">Due Date & Status</th>
-                        <th className="py-2.5 px-3 text-center">Quick Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {paymentSchedule.map((ms) => {
-                        const dueDateObj = new Date(ms.dueDate);
-                        const isPastDue = dueDateObj.getTime() < Date.now() && ms.outstandingAmountInr > 0;
-                        const daysDiff = Math.round((dueDateObj.getTime() - Date.now()) / 86400000);
-                        const isSendingThis = sendingReminderForMsId === ms.id;
+              {scheduleViewMode === 'list' ? (
+                <div className="space-y-5">
+                  {/* PENDINGS LIST VIEW */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b pb-2">
+                      <span className="text-sm font-bold text-foreground flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-amber-600" />
+                        Pending &amp; Upcoming Installments ({paymentSchedule.filter((ms) => ms.outstandingAmountInr > 0).length})
+                      </span>
+                      <span className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                        Total Pending: {formatInr(totalOutstandingInr)}
+                      </span>
+                    </div>
 
-                        return (
-                          <tr
-                            key={ms.id}
-                            className={cn(
-                              'hover:bg-muted/40 transition-colors',
-                              ms.status === 'PAID' && 'bg-emerald-500/5',
-                              ms.status === 'OVERDUE' && 'bg-rose-500/5 font-medium'
-                            )}
-                          >
-                            <td className="py-3 px-3 font-mono font-semibold text-muted-foreground">
-                              {ms.sequence}
-                            </td>
+                    {paymentSchedule.filter((ms) => ms.outstandingAmountInr > 0).length === 0 ? (
+                      <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-6 text-center text-xs text-emerald-800 dark:text-emerald-300 flex flex-col items-center gap-1.5">
+                        <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                        <span className="font-bold text-sm">All Payments Fully Cleared!</span>
+                        <span className="text-muted-foreground">There are no pending dues or overdue installments on this flat.</span>
+                      </div>
+                    ) : (
+                      <div className="grid gap-3">
+                        {paymentSchedule
+                          .filter((ms) => ms.outstandingAmountInr > 0)
+                          .map((ms) => {
+                            const dueDateObj = new Date(ms.dueDate);
+                            const isPastDue = dueDateObj.getTime() < Date.now();
+                            const daysDiff = Math.round((dueDateObj.getTime() - Date.now()) / 86400000);
+                            const isSendingThis = sendingReminderForMsId === ms.id;
 
-                            <td className="py-3 px-3">
-                              <div className="font-semibold text-foreground flex items-center gap-1.5">
-                                {ms.status === 'PAID' ? (
-                                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                                ) : ms.status === 'OVERDUE' ? (
-                                  <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
-                                ) : (
-                                  <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                            return (
+                              <Card
+                                key={ms.id}
+                                className={cn(
+                                  'border transition-colors hover:shadow-xs',
+                                  isPastDue
+                                    ? 'border-rose-300 dark:border-rose-900/60 bg-rose-50/40 dark:bg-rose-950/20'
+                                    : daysDiff <= 15
+                                    ? 'border-amber-300 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20'
+                                    : 'bg-card'
                                 )}
-                                {ms.name}
-                              </div>
-                              <div className="text-[11px] text-muted-foreground mt-0.5">
-                                Trigger: {ms.dueTrigger}
-                              </div>
-                              {ms.receiptNumber && (
-                                <div className="text-[10px] text-emerald-600 font-mono mt-0.5">
-                                  Receipt: {ms.receiptNumber}
-                                </div>
-                              )}
-                            </td>
+                              >
+                                <CardContent className="p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                  <div className="space-y-1.5 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-mono text-xs font-bold text-muted-foreground px-1.5 py-0.5 rounded bg-muted">
+                                        Stage {ms.sequence}
+                                      </span>
+                                      <h4 className="font-bold text-foreground text-sm">
+                                        {ms.name}
+                                      </h4>
+                                      {isPastDue ? (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-300 animate-pulse">
+                                          <AlertTriangle className="h-3 w-3" />
+                                          🚨 OVERDUE by {Math.abs(daysDiff)} days
+                                        </span>
+                                      ) : daysDiff <= 15 ? (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300">
+                                          <Clock className="h-3 w-3" />
+                                          Due in {daysDiff} days
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] font-medium text-muted-foreground px-2 py-0.5 rounded bg-secondary">
+                                          Scheduled Installment
+                                        </span>
+                                      )}
+                                    </div>
 
-                            <td className="py-3 px-3 text-center font-bold text-muted-foreground">
-                              {ms.percentage}%
-                            </td>
+                                    <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-3">
+                                      <span>Trigger: <strong>{ms.dueTrigger}</strong></span>
+                                      <span>•</span>
+                                      <span>Share: <strong>{ms.percentage}%</strong></span>
+                                      <span>•</span>
+                                      <span>Due Date: <strong>{dueDateObj.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></span>
+                                    </div>
+                                  </div>
 
-                            <td className="py-3 px-3 text-right font-medium">
-                              {formatInr(ms.demandAmountInr)}
-                            </td>
+                                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 shrink-0">
+                                    <div className="text-right sm:pr-2">
+                                      <div className="text-xs text-muted-foreground font-medium">Pending Balance</div>
+                                      <div className="text-lg font-bold text-amber-700 dark:text-amber-400">
+                                        {formatInr(ms.outstandingAmountInr)}
+                                      </div>
+                                      <div className="text-[10px] text-muted-foreground">
+                                        Demand: {formatInr(ms.demandAmountInr)}
+                                      </div>
+                                    </div>
 
-                            <td className="py-3 px-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
-                              {formatInr(ms.paidAmountInr)}
-                            </td>
+                                    <div className="flex items-center gap-1.5">
+                                      <Button
+                                        size="sm"
+                                        className="h-8 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                        onClick={() => onRecordPayment(booking, ms)}
+                                      >
+                                        <CreditCard className="h-3.5 w-3.5" />
+                                        Record Payment
+                                      </Button>
 
-                            <td className="py-3 px-3 text-right font-bold text-amber-600 dark:text-amber-400">
-                              {formatInr(ms.outstandingAmountInr)}
-                            </td>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={isSendingThis}
+                                        className="h-8 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1"
+                                        onClick={() => handleTriggerMilestoneReminder(ms, 'WHATSAPP')}
+                                      >
+                                        <Send className="h-3.5 w-3.5" />
+                                        Remind
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
 
-                            <td className="py-3 px-3">
-                              <div className="flex flex-col gap-1 items-start">
-                                <span className="font-medium text-foreground flex items-center gap-1 text-[11px]">
-                                  <Calendar className="h-3 w-3 text-muted-foreground" />
-                                  {dueDateObj.toLocaleDateString('en-IN', {
-                                    day: '2-digit',
-                                    month: 'short',
-                                    year: 'numeric',
-                                  })}
-                                </span>
+                  {/* PAID / CLEARED PAYMENTS LIST VIEW */}
+                  <div className="space-y-3 pt-2">
+                    <div className="flex items-center justify-between border-b pb-2">
+                      <span className="text-sm font-bold text-foreground flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        Verified Customer Payments &amp; Receipts ({paymentSchedule.filter((ms) => (ms.paidAmountInr || 0) > 0).length})
+                      </span>
+                      <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                        Total Paid: {formatInr(totalPaidInr)}
+                      </span>
+                    </div>
 
-                                {ms.status === 'PAID' ? (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-                                    PAID
-                                  </span>
-                                ) : ms.status === 'OVERDUE' ? (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 dark:bg-rose-950/50 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800 animate-pulse">
-                                    🚨 OVERDUE ({Math.abs(daysDiff)}d late)
-                                  </span>
-                                ) : daysDiff <= 7 ? (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-                                    DUE in {daysDiff} days
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                                    UPCOMING
-                                  </span>
-                                )}
-                              </div>
-                            </td>
+                    {paymentSchedule.filter((ms) => (ms.paidAmountInr || 0) > 0).length === 0 ? (
+                      <div className="rounded-lg border border-border p-6 text-center text-xs text-muted-foreground">
+                        No payments cleared yet. Click "+ Record Milestone Payment" to credit a collection.
+                      </div>
+                    ) : (
+                      <div className="grid gap-2.5">
+                        {paymentSchedule
+                          .filter((ms) => (ms.paidAmountInr || 0) > 0)
+                          .map((ms) => {
+                            const matchingCol = collections.find(
+                              (c) => c.bookingId === booking.id && (c.milestoneName || '').toLowerCase() === ms.name.toLowerCase()
+                            );
+                            const recNumber = matchingCol?.receiptNumber || ms.receiptNumber || (advancePaymentRef && ms.sequence === 1 ? `BM-RCP-${booking.bookingNumber.slice(-5)}` : `BM-RCP-${(ms.id || '000000').slice(0, 6).toUpperCase()}`);
 
-                            <td className="py-3 px-3 text-center">
-                              <div className="flex items-center justify-center gap-1.5">
-                                {ms.outstandingAmountInr > 0 ? (
-                                  <>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-6 text-[10px] px-2 font-semibold text-emerald-700 dark:text-emerald-300 border-emerald-300 hover:bg-emerald-50"
-                                      onClick={() => onRecordPayment(booking, ms)}
-                                    >
-                                      + Pay
-                                    </Button>
+                            return (
+                              <Card key={ms.id} className="bg-emerald-500/5 border-emerald-500/20">
+                                <CardContent className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                                        {recNumber}
+                                      </span>
+                                      <span className="font-semibold text-foreground text-xs">
+                                        {ms.name}
+                                      </span>
+                                      <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded">
+                                        <Check className="h-3 w-3" /> Verified &amp; Cleared
+                                      </span>
+                                    </div>
 
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      disabled={isSendingThis}
-                                      className="h-6 text-[10px] px-1.5 text-primary hover:bg-primary/10 gap-1"
-                                      onClick={() => handleTriggerMilestoneReminder(ms, 'WHATSAPP')}
-                                      title="Dispatch instant WhatsApp payment reminder"
-                                    >
-                                      <Send className="h-3 w-3" />
-                                      Remind
-                                    </Button>
-                                  </>
-                                ) : (
-                                  <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                                    <Check className="h-3 w-3 text-emerald-600" /> Cleared
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                                    <div className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-2">
+                                      <span>Mode: <strong>{matchingCol?.paymentMode || advancePaymentMode || 'NEFT'}</strong></span>
+                                      {(matchingCol?.instrumentRef || (advancePaymentRef && ms.sequence === 1)) && (
+                                        <>
+                                          <span>•</span>
+                                          <span className="font-mono">Ref: {matchingCol?.instrumentRef || advancePaymentRef}</span>
+                                        </>
+                                      )}
+                                      <span>•</span>
+                                      <span>Stage {ms.sequence} ({ms.percentage}%)</span>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-right">
+                                    <div className="text-base font-bold text-emerald-700 dark:text-emerald-400">
+                                      {formatInr(ms.paidAmountInr)}
+                                    </div>
+                                    <div className="text-[10px] text-muted-foreground">
+                                      Credited in Ledger
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* Milestones Table */
+                <div className="border rounded-lg overflow-hidden bg-card">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-muted/60 text-muted-foreground uppercase text-[10px] tracking-wider border-b">
+                        <tr>
+                          <th className="py-2.5 px-3">#</th>
+                          <th className="py-2.5 px-3">Milestone Stage & Trigger</th>
+                          <th className="py-2.5 px-3 text-center">% Share</th>
+                          <th className="py-2.5 px-3 text-right">Demand Amount</th>
+                          <th className="py-2.5 px-3 text-right">Paid Amount</th>
+                          <th className="py-2.5 px-3 text-right">Balance Due</th>
+                          <th className="py-2.5 px-3">Due Date & Status</th>
+                          <th className="py-2.5 px-3 text-center">Quick Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {paymentSchedule.map((ms) => {
+                          const dueDateObj = new Date(ms.dueDate);
+                          const isPastDue = dueDateObj.getTime() < Date.now() && ms.outstandingAmountInr > 0;
+                          const daysDiff = Math.round((dueDateObj.getTime() - Date.now()) / 86400000);
+                          const isSendingThis = sendingReminderForMsId === ms.id;
+
+                          return (
+                            <tr
+                              key={ms.id}
+                              className={cn(
+                                'hover:bg-muted/40 transition-colors',
+                                ms.status === 'PAID' && 'bg-emerald-500/5',
+                                ms.status === 'OVERDUE' && 'bg-rose-500/5 font-medium'
+                              )}
+                            >
+                              <td className="py-3 px-3 font-mono font-semibold text-muted-foreground">
+                                {ms.sequence}
+                              </td>
+
+                              <td className="py-3 px-3">
+                                <div className="font-semibold text-foreground flex items-center gap-1.5">
+                                  {ms.status === 'PAID' ? (
+                                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                                  ) : ms.status === 'OVERDUE' ? (
+                                    <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                                  ) : (
+                                    <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                  )}
+                                  {ms.name}
+                                </div>
+                                <div className="text-[11px] text-muted-foreground mt-0.5">
+                                  Trigger: {ms.dueTrigger}
+                                </div>
+                                {ms.receiptNumber && (
+                                  <div className="text-[10px] text-emerald-600 font-mono mt-0.5">
+                                    Receipt: {ms.receiptNumber}
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="py-3 px-3 text-center font-bold text-muted-foreground">
+                                {ms.percentage}%
+                              </td>
+
+                              <td className="py-3 px-3 text-right font-medium">
+                                {formatInr(ms.demandAmountInr)}
+                              </td>
+
+                              <td className="py-3 px-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                                {formatInr(ms.paidAmountInr)}
+                              </td>
+
+                              <td className="py-3 px-3 text-right font-bold text-amber-600 dark:text-amber-400">
+                                {formatInr(ms.outstandingAmountInr)}
+                              </td>
+
+                              <td className="py-3 px-3">
+                                <div className="flex flex-col gap-1 items-start">
+                                  <span className="font-medium text-foreground flex items-center gap-1 text-[11px]">
+                                    <Calendar className="h-3 w-3 text-muted-foreground" />
+                                    {dueDateObj.toLocaleDateString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      year: 'numeric',
+                                    })}
+                                  </span>
+
+                                  {ms.status === 'PAID' ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                                      PAID
+                                    </span>
+                                  ) : ms.status === 'OVERDUE' ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 dark:bg-rose-950/50 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-800 animate-pulse">
+                                      🚨 OVERDUE ({Math.abs(daysDiff)}d late)
+                                    </span>
+                                  ) : daysDiff <= 7 ? (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                                      DUE in {daysDiff} days
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                      UPCOMING
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="py-3 px-3 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {ms.outstandingAmountInr > 0 ? (
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-6 text-[10px] px-2 font-semibold text-emerald-700 dark:text-emerald-300 border-emerald-300 hover:bg-emerald-50"
+                                        onClick={() => onRecordPayment(booking, ms)}
+                                      >
+                                        + Pay
+                                      </Button>
+
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={isSendingThis}
+                                        className="h-6 text-[10px] px-1.5 text-primary hover:bg-primary/10 gap-1"
+                                        onClick={() => handleTriggerMilestoneReminder(ms, 'WHATSAPP')}
+                                        title="Dispatch instant WhatsApp payment reminder"
+                                      >
+                                        <Send className="h-3 w-3" />
+                                        Remind
+                                      </Button>
+                                    </>
+                                  ) : (
+                                    <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                      <Check className="h-3 w-3 text-emerald-600" /> Cleared
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* Advance Payment Notice Box */}
               <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200 flex items-start gap-3">
@@ -700,7 +931,7 @@ export function BookingDetailsDrawer({
                             className="h-6 text-[11px] font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1 px-2"
                             onClick={() => {
                               onClose();
-                              navigate(`/builder/customers?leadId=${booking.leadId}`);
+                              navigate(`/builder/customers/${booking.leadId}`);
                             }}
                           >
                             <ExternalLink className="h-3 w-3" />

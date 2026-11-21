@@ -1537,7 +1537,7 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/builder/customers?leadId=${lead.id}`);
+                          navigate(`/builder/customers/${lead.id}`);
                         }}
                         className="text-primary hover:underline font-semibold text-xs text-left flex items-center gap-1 group cursor-pointer"
                         title="Click to open Customer Profile in CRM"
@@ -1736,7 +1736,7 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                                   type="button"
                                   onClick={() => {
                                     setSelectedUnit(null);
-                                    navigate(`/builder/customers?leadId=${lead.id}`);
+                                    navigate(`/builder/customers/${lead.id}`);
                                   }}
                                   className="font-bold text-primary hover:underline text-sm flex items-center gap-1 group text-left cursor-pointer"
                                   title="Click to open Customer Profile in CRM"
@@ -1858,7 +1858,7 @@ function ProjectInventoryWorkspace({ onStartProject, onEditProject, onStartUnit 
                                 className="flex-1 h-8 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1.5"
                                 onClick={() => {
                                   setSelectedUnit(null);
-                                  navigate(`/builder/customers?leadId=${lead.id}`);
+                                  navigate(`/builder/customers/${lead.id}`);
                                 }}
                               >
                                 <UserCheck className="h-3.5 w-3.5" />

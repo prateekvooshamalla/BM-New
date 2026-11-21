@@ -99,6 +99,11 @@ const CustomerPortalPage = React.lazy(() =>
     default: m.CustomerPortalPage,
   }))
 );
+const CustomerViewPage = React.lazy(() =>
+  import('@/features/leads/pages/CustomerViewPage').then((m) => ({
+    default: m.CustomerViewPage,
+  }))
+);
 
 import {
   PublicAboutPage,
@@ -188,7 +193,9 @@ export function AppRouter() {
             <Route path="cost-sheets" element={<PricingAndCostSheetsPage />} />
             <Route path="quotations" element={<PricingAndCostSheetsPage />} />
             <Route path="leads" element={<LeadsCrmPage />} />
+            <Route path="leads/:id" element={<CustomerViewPage />} />
             <Route path="customers" element={<LeadsCrmPage defaultTab="customers" />} />
+            <Route path="customers/:id" element={<CustomerViewPage />} />
             <Route path="forms" element={<FormBuilderPage />} />
             <Route path="inbox" element={<WhatsAppInboxPage />} />
             <Route path="channel-partners" element={<ChannelPartnersPage />} />
@@ -222,7 +229,9 @@ export function AppRouter() {
             <Route path="pricing" element={<PricingAndCostSheetsPage />} />
             <Route path="quotations" element={<PricingAndCostSheetsPage />} />
             <Route path="leads" element={<LeadsCrmPage />} />
+            <Route path="leads/:id" element={<CustomerViewPage />} />
             <Route path="customers" element={<LeadsCrmPage defaultTab="customers" />} />
+            <Route path="customers/:id" element={<CustomerViewPage />} />
             <Route path="forms" element={<FormBuilderPage />} />
             <Route path="inbox" element={<WhatsAppInboxPage />} />
             <Route path="channel-partners" element={<ChannelPartnersPage />} />

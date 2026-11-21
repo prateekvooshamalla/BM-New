@@ -927,9 +927,9 @@ function BookingsAndCollectionsContent({
                       <div className="space-y-0.5">
                         <button
                           type="button"
-                          onClick={() => navigate(`/builder/customers?leadId=${leadId}`)}
+                          onClick={() => navigate(`/builder/customers/${leadId}`)}
                           className="font-semibold text-primary hover:underline text-left flex items-center gap-1 group cursor-pointer"
-                          title="Click to view Customer Profile in CRM"
+                          title="Click to view Customer 360° Profile"
                         >
                           <span>{c?.fullName || 'Customer'}</span>
                           <ExternalLink className="h-3 w-3 opacity-60 group-hover:opacity-100" />
@@ -1140,7 +1140,7 @@ function BookingsAndCollectionsContent({
                         {bk?.customer?.fullName ? (
                           <button
                             type="button"
-                            onClick={() => navigate(`/builder/customers?leadId=${bk.leadId}`)}
+                            onClick={() => navigate(`/builder/customers/${bk.leadId}`)}
                             className="text-primary hover:underline font-medium cursor-pointer"
                             title="View customer profile in CRM"
                           >

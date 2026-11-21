@@ -6,6 +6,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Download,
+  ExternalLink,
   FileSpreadsheet,
   Kanban,
   List,
@@ -1159,7 +1160,15 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
                     return (
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-semibold text-foreground">{c.customerName}</span>
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/builder/customers/${c.id}`)}
+                            className="font-semibold text-primary hover:underline text-left cursor-pointer flex items-center gap-1 group"
+                            title="Click to view Customer 360° Page"
+                          >
+                            <span>{c.customerName}</span>
+                            <ExternalLink className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                          </button>
                           <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 px-2 py-0.5 text-[9px] font-bold text-emerald-800 dark:text-emerald-300">
                             <Star className="h-2.5 w-2.5 fill-emerald-600 text-emerald-600" />
                             Flat Buyer
@@ -1266,21 +1275,20 @@ function LeadWorkspace({ defaultTab }: LeadsCrmPageProps) {
                           variant="outline"
                           size="sm"
                           className="h-7 text-xs font-semibold text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 gap-1"
-                          onClick={() => navigate('/builder/bookings?tab=bookings')}
-                          title="View booked payments, advance and payment cycle"
+                          onClick={() => navigate(`/builder/customers/${cust.id}`)}
+                          title="View customer payment details, list view and pendings"
                         >
                           <ReceiptIndianRupee className="h-3 w-3" />
-                          Payments & Cycle
+                          Payments &amp; Cycle
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => {
-                            setStageError(null);
-                            setSelectedLead(cust);
-                          }}
+                          className="h-7 text-xs font-semibold text-primary border-primary/40 hover:bg-primary/10 gap-1"
+                          onClick={() => navigate(`/builder/customers/${cust.id}`)}
+                          title="Open complete Customer 360° Page"
                         >
+                          <UserCheck className="h-3 w-3" />
                           Customer 360°
                         </Button>
                         <Button
